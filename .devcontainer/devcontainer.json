@@ -1,0 +1,25 @@
+{
+  "name": "React TypeScript Environment",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-vscode.vscode-typescript-next"
+      ]
+    }
+  },
+
+  "postCreateCommand": "npm install",
+
+  "forwardPorts": [3000],
+
+  "portsAttributes": {
+    "3000": {
+      "label": "React App",
+      "onAutoForward": "notify"
+    }
+  }
+}
