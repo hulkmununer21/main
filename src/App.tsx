@@ -197,7 +197,7 @@ const App = () => (
               path="/admin-portal"
               element={
                 <ProtectedRoute allowedRoles={["admin"]}>
-                  <AdminOverview />
+                  <AdminPortal />
                 </ProtectedRoute>
               }
             />
