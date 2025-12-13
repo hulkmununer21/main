@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Home, CreditCard, FileText, MessageSquare, Bell, User, LogOut, Download, Eye, Wrench, Calendar, Send, Check, AlertCircle, TrendingUp, Clock, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
@@ -18,6 +18,35 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import LodgerOverview from "./lodger/LodgerOverview";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
+interface Document {
+  id: number;
+  name: string;
+  type: string;
+  date: string;
+  size: string;
+  status: string;
+}
+
+interface Message {
+  id: number;
+  from: string;
+  subject: string;
+  preview: string;
+  date: string;
+  unread: boolean;
+}
+
+interface Inspection {
+  id: number;
+  date: string;
+  inspector: string;
+  type: string;
+  findings: string;
+  rating: string;
+  reportUrl: string;
+  uploadedBy: string;
+}
 
 const LodgerPortal = () => {
   const { logout, user } = useAuth();
@@ -34,11 +63,11 @@ const LodgerPortal = () => {
   const [binDutyCompleted, setBinDutyCompleted] = useState(false);
   const [selectedExtraCharge, setSelectedExtraCharge] = useState<number | null>(null);
   const [isExtraChargeDialogOpen, setIsExtraChargeDialogOpen] = useState(false);
-  const [viewingDocument, setViewingDocument] = useState<any>(null);
+  const [viewingDocument, setViewingDocument] = useState<Document | null>(null);
   const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
-  const [viewingMessage, setViewingMessage] = useState<any>(null);
+  const [viewingMessage, setViewingMessage] = useState<Message | null>(null);
   const [isMessageViewOpen, setIsMessageViewOpen] = useState(false);
-  const [viewingInspection, setViewingInspection] = useState<any>(null);
+  const [viewingInspection, setViewingInspection] = useState<Inspection | null>(null);
   const [isInspectionViewOpen, setIsInspectionViewOpen] = useState(false);
   
   // Mobile users get a completely different experience
@@ -241,29 +270,29 @@ const LodgerPortal = () => {
     setSelectedExtraCharge(null);
   };
 
-  const handleViewDocument = (document: any) => {
+  const handleViewDocument = (document: Document) => {
     setViewingDocument(document);
     setIsDocumentViewOpen(true);
   };
 
-  const handleDownloadDocument = (document: any) => {
+  const handleDownloadDocument = (document: Document) => {
     toast({
       title: "Download Started",
       description: `Downloading ${document.name}...`,
     });
   };
 
-  const handleViewMessage = (message: any) => {
+  const handleViewMessage = (message: Message) => {
     setViewingMessage(message);
     setIsMessageViewOpen(true);
   };
 
-  const handleViewInspection = (inspection: any) => {
+  const handleViewInspection = (inspection: Inspection) => {
     setViewingInspection(inspection);
     setIsInspectionViewOpen(true);
   };
 
-  const handleDownloadInspectionReport = (inspection: any) => {
+  const handleDownloadInspectionReport = (inspection: Inspection) => {
     toast({
       title: "Download Started",
       description: `Downloading inspection report from ${inspection.date}...`,

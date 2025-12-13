@@ -1,7 +1,7 @@
 import { Bell, LogOut, Building, Users, DollarSign, Wrench, TrendingUp, Plus, AlertCircle, Check, Calendar, Trash2, ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { BottomNav } from "@/components/mobile/BottomNav";

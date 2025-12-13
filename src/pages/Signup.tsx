@@ -6,12 +6,13 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import logo from "@/assets/logo.png";
+import { useAuth } from "@/contexts/useAuth";
 
 const Signup = () => {
+  const { signup } = useAuth();
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
-    firstName: "",
-    lastName: "",
+    fullName: "",
     email: "",
     phone: "",
     password: "",
@@ -19,6 +20,8 @@ const Signup = () => {
     userType: "lodger",
     agreeToTerms: false
   });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({
@@ -27,21 +30,36 @@ const Signup = () => {
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (formData.password !== formData.confirmPassword) {
-      alert("Passwords do not match!");
-      return;
-    }
+    setLoading(true);
+    setError(null);
+    try {
+      if (formData.password !== formData.confirmPassword) {
+        throw new Error("Passwords do not match!");
+      }
 
-    if (!formData.agreeToTerms) {
-      alert("Please agree to the terms and conditions");
-      return;
-    }
+      if (!formData.agreeToTerms) {
+        throw new Error("Please agree to the terms and conditions");
+      }
 
-    // Simulate signup success
-    navigate("/login");
+      await signup(
+        formData.email,
+        formData.password,
+        formData.userType as "lodger" | "landlord",
+        {
+          full_name: formData.fullName,
+          phone: formData.phone,
+        }
+      );
+
+      // Simulate signup success
+      navigate("/login");
+    } catch (err) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Signup failed");
+    }
+    setLoading(false);
   };
 
   return (
@@ -82,30 +100,16 @@ const Signup = () => {
                 </select>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="firstName">First Name</Label>
-                  <Input
-                    id="firstName"
-                    name="firstName"
-                    placeholder="John"
-                    value={formData.firstName}
-                    onChange={handleChange}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="lastName">Last Name</Label>
-                  <Input
-                    id="lastName"
-                    name="lastName"
-                    placeholder="Doe"
-                    value={formData.lastName}
-                    onChange={handleChange}
-                    required
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="fullName">Full Name</Label>
+                <Input
+                  id="fullName"
+                  name="fullName"
+                  placeholder="John Doe"
+                  value={formData.fullName}
+                  onChange={handleChange}
+                  required
+                />
               </div>
 
               <div className="space-y-2">
@@ -185,11 +189,14 @@ const Signup = () => {
                 </label>
               </div>
 
+              {error && <div className="text-red-500 text-sm">{error}</div>}
+
               <Button
                 type="submit"
                 className="w-full bg-gradient-gold text-primary font-semibold shadow-gold hover:shadow-lifted"
+                disabled={loading}
               >
-                Create Account
+                {loading ? "Signing up..." : "Create Account"}
               </Button>
             </form>
 

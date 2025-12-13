@@ -1,0 +1,1547 @@
+{
+  "analysis_date": "2024-12-09",
+  "description": "Comprehensive database schema analysis based on all portal pages in the Domus Dwell Manage application",
+  "entities": {
+    "users": {
+      "description": "Core user entity for all user types in the system",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true,
+          "required": true
+        },
+        "email": {
+          "type": "string",
+          "unique": true,
+          "required": true,
+          "validation": "email format"
+        },
+        "password": {
+          "type": "string",
+          "required": true,
+          "hashed": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "phone": {
+          "type": "string",
+          "nullable": true,
+          "format": "+44 7xxx xxxxxx"
+        },
+        "role": {
+          "type": "enum",
+          "values": ["admin", "staff", "landlord", "lodger", "service_user"],
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["active", "suspended", "on_leave"],
+          "default": "active"
+        },
+        "company_name": {
+          "type": "string",
+          "nullable": true,
+          "description": "For landlords"
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "last_active": {
+          "type": "timestamp",
+          "nullable": true
+        }
+      },
+      "relationships": {
+        "properties": "one-to-many (for landlords)",
+        "tenancies": "one-to-many (for lodgers)",
+        "staff_assignments": "one-to-many (for staff)",
+        "service_tasks": "one-to-many (for service users)",
+        "complaints_submitted": "one-to-many",
+        "payments": "one-to-many",
+        "documents": "one-to-many",
+        "messages": "one-to-many"
+      },
+      "operations": ["create", "read", "update", "delete", "suspend", "activate"],
+      "indexes": ["email", "role", "status"]
+    },
+    "properties": {
+      "description": "Physical properties/buildings managed in the system",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "name": {
+          "type": "string",
+          "required": true,
+          "example": "Modern City Centre Studio"
+        },
+        "address": {
+          "type": "string",
+          "required": true
+        },
+        "postcode": {
+          "type": "string",
+          "required": true
+        },
+        "type": {
+          "type": "enum",
+          "values": ["studio", "1bed", "2bed", "3bed", "house", "hmo"],
+          "required": true
+        },
+        "total_rooms": {
+          "type": "integer",
+          "required": true
+        },
+        "occupied_rooms": {
+          "type": "integer",
+          "default": 0
+        },
+        "bedrooms": {
+          "type": "integer"
+        },
+        "bathrooms": {
+          "type": "integer"
+        },
+        "square_feet": {
+          "type": "integer",
+          "nullable": true
+        },
+        "furnished": {
+          "type": "boolean",
+          "default": true
+        },
+        "description": {
+          "type": "text",
+          "nullable": true
+        },
+        "image_url": {
+          "type": "string",
+          "nullable": true
+        },
+        "landlord_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["active", "inactive", "under_maintenance"],
+          "default": "active"
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "landlord": "many-to-one (users)",
+        "rooms": "one-to-many",
+        "tenancies": "one-to-many",
+        "inspections": "one-to-many",
+        "bin_schedules": "one-to-one",
+        "bin_rotations": "one-to-many",
+        "complaints": "one-to-many",
+        "documents": "one-to-many",
+        "meter_readings": "one-to-many",
+        "staff_assignments": "many-to-many"
+      },
+      "operations": ["create", "read", "update", "delete", "search", "filter"],
+      "indexes": ["landlord_id", "status", "type"]
+    },
+    "rooms": {
+      "description": "Individual rooms within properties",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_number": {
+          "type": "string",
+          "required": true,
+          "example": "Room 1, Room 2A, Room 3B"
+        },
+        "status": {
+          "type": "enum",
+          "values": ["occupied", "vacant", "under_maintenance"],
+          "default": "vacant"
+        },
+        "current_tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "many-to-one",
+        "tenant": "many-to-one (users)",
+        "tenancies": "one-to-many"
+      },
+      "operations": ["create", "read", "update", "delete"],
+      "indexes": ["property_id", "status", "current_tenant_id"]
+    },
+    "tenancies": {
+      "description": "Tenancy agreements and contracts",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "rent_amount": {
+          "type": "decimal",
+          "precision": 10,
+          "scale": 2,
+          "required": true
+        },
+        "deposit_amount": {
+          "type": "decimal",
+          "precision": 10,
+          "scale": 2,
+          "required": true
+        },
+        "move_in_date": {
+          "type": "date",
+          "required": true
+        },
+        "contract_end_date": {
+          "type": "date",
+          "required": true
+        },
+        "actual_move_out_date": {
+          "type": "date",
+          "nullable": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["active", "ending_soon", "ended", "terminated"],
+          "default": "active"
+        },
+        "payment_due_day": {
+          "type": "integer",
+          "description": "Day of month rent is due",
+          "default": 1
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "tenant": "many-to-one (users)",
+        "payments": "one-to-many",
+        "documents": "one-to-many"
+      },
+      "operations": ["create", "read", "update", "terminate", "renew"],
+      "indexes": ["tenant_id", "property_id", "status", "contract_end_date"]
+    },
+    "payments": {
+      "description": "All payment transactions including rent, deposits, utilities, extra charges",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "tenancy_id": {
+          "type": "uuid",
+          "foreign_key": "tenancies.id",
+          "nullable": true
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "type": {
+          "type": "enum",
+          "values": ["rent", "deposit", "utilities", "extra_charge", "refund"],
+          "required": true
+        },
+        "amount": {
+          "type": "decimal",
+          "precision": 10,
+          "scale": 2,
+          "required": true
+        },
+        "due_date": {
+          "type": "date",
+          "required": true
+        },
+        "paid_date": {
+          "type": "date",
+          "nullable": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["pending", "paid", "overdue", "waived", "refunded"],
+          "default": "pending"
+        },
+        "payment_method": {
+          "type": "enum",
+          "values": ["card", "bank_transfer", "paypal", "cash"],
+          "nullable": true
+        },
+        "reference": {
+          "type": "string",
+          "unique": true,
+          "example": "PAY-2024-12-001"
+        },
+        "receipt_url": {
+          "type": "string",
+          "nullable": true
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "tenancy": "many-to-one",
+        "tenant": "many-to-one (users)",
+        "property": "many-to-one",
+        "extra_charge": "one-to-one (if type is extra_charge)"
+      },
+      "operations": ["create", "read", "update", "record_payment", "generate_invoice", "send_reminder"],
+      "indexes": ["tenant_id", "status", "due_date", "paid_date", "reference"]
+    },
+    "extra_charges": {
+      "description": "Additional charges applied to tenants for various reasons",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true
+        },
+        "reason": {
+          "type": "enum",
+          "values": ["missed_bin_duty", "damage_to_property", "deep_cleaning", "lost_key", "late_payment_fee", "maintenance_callout", "other"],
+          "required": true
+        },
+        "description": {
+          "type": "text",
+          "nullable": true
+        },
+        "amount": {
+          "type": "decimal",
+          "precision": 10,
+          "scale": 2,
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["outstanding", "paid", "waived"],
+          "default": "outstanding"
+        },
+        "evidence_urls": {
+          "type": "json",
+          "description": "Array of image/document URLs as evidence",
+          "nullable": true
+        },
+        "due_date": {
+          "type": "date",
+          "required": true
+        },
+        "added_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "tenant": "many-to-one (users)",
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "added_by_user": "many-to-one (users)",
+        "payment": "one-to-one (payments)"
+      },
+      "operations": ["create", "read", "update", "waive", "mark_paid"],
+      "indexes": ["tenant_id", "property_id", "status", "reason"]
+    },
+    "inspections": {
+      "description": "Property and room inspections",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true,
+          "description": "Null for full property inspections"
+        },
+        "type": {
+          "type": "enum",
+          "values": ["routine", "quarterly", "annual", "move_in", "move_out", "pre_vacancy"],
+          "required": true
+        },
+        "scheduled_date": {
+          "type": "date",
+          "required": true
+        },
+        "scheduled_time": {
+          "type": "time",
+          "nullable": true
+        },
+        "completed_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "inspector_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true,
+          "description": "Staff or service user who conducts inspection"
+        },
+        "status": {
+          "type": "enum",
+          "values": ["scheduled", "in_progress", "completed", "issues_found", "cancelled"],
+          "default": "scheduled"
+        },
+        "result": {
+          "type": "enum",
+          "values": ["pass", "minor_issues", "action_required", "fail"],
+          "nullable": true
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "issues_found": {
+          "type": "json",
+          "description": "Array of issues identified",
+          "nullable": true
+        },
+        "photo_urls": {
+          "type": "json",
+          "description": "Array of inspection photo URLs",
+          "nullable": true
+        },
+        "report_url": {
+          "type": "string",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "inspector": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "complete", "schedule", "upload_photos", "generate_report"],
+      "indexes": ["property_id", "status", "scheduled_date", "inspector_id"]
+    },
+    "bin_schedules": {
+      "description": "Council bin collection schedules for properties",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true,
+          "unique": true
+        },
+        "bin_type": {
+          "type": "enum",
+          "values": ["general_waste", "recycling", "garden_waste", "mixed"],
+          "required": true
+        },
+        "collection_day": {
+          "type": "enum",
+          "values": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+          "required": true
+        },
+        "frequency": {
+          "type": "enum",
+          "values": ["weekly", "fortnightly", "monthly"],
+          "required": true
+        },
+        "next_collection_date": {
+          "type": "date",
+          "required": true
+        },
+        "collection_time": {
+          "type": "string",
+          "default": "Before 7:00 AM"
+        },
+        "assigned_staff_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "one-to-one",
+        "assigned_staff": "many-to-one (users)",
+        "collection_logs": "one-to-many"
+      },
+      "operations": ["create", "read", "update", "notify_staff"],
+      "indexes": ["property_id", "next_collection_date"]
+    },
+    "bin_rotations": {
+      "description": "In-house weekly bin duty rotation for lodgers",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "current_room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "required": true
+        },
+        "current_tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "rotation_day": {
+          "type": "enum",
+          "values": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+          "required": true
+        },
+        "week_start_date": {
+          "type": "date",
+          "required": true
+        },
+        "week_end_date": {
+          "type": "date",
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["active", "completed", "missed", "overdue"],
+          "default": "active"
+        },
+        "completion_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "verified_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "Staff member who verified completion"
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "many-to-one",
+        "current_room": "many-to-one (rooms)",
+        "current_tenant": "many-to-one (users)",
+        "verified_by_user": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "mark_complete", "mark_missed", "send_reminder"],
+      "indexes": ["property_id", "current_tenant_id", "week_start_date", "status"]
+    },
+    "complaints": {
+      "description": "Lodger complaints and issues",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "complaint_number": {
+          "type": "string",
+          "unique": true,
+          "example": "#C0045"
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true
+        },
+        "category": {
+          "type": "enum",
+          "values": ["maintenance", "service_quality", "communication", "billing", "property_condition", "staff_conduct", "noise", "other"],
+          "required": true
+        },
+        "subject": {
+          "type": "string",
+          "required": true
+        },
+        "description": {
+          "type": "text",
+          "required": true
+        },
+        "priority": {
+          "type": "enum",
+          "values": ["low", "medium", "high", "urgent"],
+          "default": "medium"
+        },
+        "status": {
+          "type": "enum",
+          "values": ["received", "open", "in_progress", "resolved", "closed"],
+          "default": "received"
+        },
+        "assigned_to": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "Staff member assigned"
+        },
+        "resolution_notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "submitted_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "resolved_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "tenant": "many-to-one (users)",
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "assigned_staff": "many-to-one (users)",
+        "complaint_updates": "one-to-many"
+      },
+      "operations": ["create", "read", "update", "assign", "resolve", "close", "change_priority"],
+      "indexes": ["tenant_id", "property_id", "status", "priority", "submitted_date"]
+    },
+    "documents": {
+      "description": "All document storage including contracts, certificates, reports",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "type": {
+          "type": "enum",
+          "values": ["tenancy_agreement", "id_verification", "reference_letter", "gas_safety_certificate", "electrical_safety_certificate", "epc_certificate", "inventory_report", "inspection_report", "insurance_document", "other"],
+          "required": true
+        },
+        "filename": {
+          "type": "string",
+          "required": true
+        },
+        "file_url": {
+          "type": "string",
+          "required": true
+        },
+        "file_size": {
+          "type": "string",
+          "description": "Human readable size e.g. '2.4 MB'"
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "nullable": true
+        },
+        "tenancy_id": {
+          "type": "uuid",
+          "foreign_key": "tenancies.id",
+          "nullable": true
+        },
+        "uploaded_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "uploaded_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "expiry_date": {
+          "type": "date",
+          "nullable": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["valid", "expiring_soon", "expired"],
+          "default": "valid"
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "tenant": "many-to-one (users)",
+        "property": "many-to-one",
+        "tenancy": "many-to-one",
+        "uploaded_by_user": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "delete", "download", "request_renewal"],
+      "indexes": ["tenant_id", "property_id", "type", "status", "expiry_date"]
+    },
+    "meter_readings": {
+      "description": "Utility meter readings for properties",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "meter_type": {
+          "type": "enum",
+          "values": ["electricity", "gas", "water"],
+          "required": true
+        },
+        "reading_value": {
+          "type": "string",
+          "required": true,
+          "description": "Actual meter reading"
+        },
+        "reading_date": {
+          "type": "date",
+          "required": true
+        },
+        "usage_amount": {
+          "type": "string",
+          "nullable": true,
+          "description": "Calculated usage e.g. '245 kWh'"
+        },
+        "cost": {
+          "type": "decimal",
+          "precision": 10,
+          "scale": 2,
+          "nullable": true
+        },
+        "next_reading_due": {
+          "type": "date",
+          "nullable": true
+        },
+        "recorded_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "property": "many-to-one",
+        "recorded_by_user": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "calculate_usage"],
+      "indexes": ["property_id", "meter_type", "reading_date"]
+    },
+    "notifications": {
+      "description": "SMS, email, and in-app notifications sent to users",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "type": {
+          "type": "enum",
+          "values": ["bin_reminder", "payment_reminder", "inspection_notice", "extra_charge_alert", "maintenance_update", "general_notice", "complaint_update", "custom"],
+          "required": true
+        },
+        "recipient_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "channel": {
+          "type": "enum",
+          "values": ["sms", "email", "in_app", "all"],
+          "required": true
+        },
+        "subject": {
+          "type": "string",
+          "nullable": true
+        },
+        "message": {
+          "type": "text",
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["pending", "sent", "delivered", "failed", "read"],
+          "default": "pending"
+        },
+        "sent_at": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "delivered_at": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "read_at": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "sent_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "User who sent (null for system-generated)"
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "nullable": true
+        },
+        "related_entity_type": {
+          "type": "string",
+          "nullable": true,
+          "description": "e.g. 'payment', 'complaint', 'inspection'"
+        },
+        "related_entity_id": {
+          "type": "uuid",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "recipient": "many-to-one (users)",
+        "sent_by_user": "many-to-one (users)",
+        "property": "many-to-one"
+      },
+      "operations": ["create", "read", "send", "resend", "mark_read"],
+      "indexes": ["recipient_id", "status", "sent_at", "channel"]
+    },
+    "messages": {
+      "description": "Internal messaging system between users",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "from_user_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "to_user_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "subject": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "text",
+          "required": true
+        },
+        "is_read": {
+          "type": "boolean",
+          "default": false
+        },
+        "read_at": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "from_user": "many-to-one (users)",
+        "to_user": "many-to-one (users)",
+        "property": "many-to-one"
+      },
+      "operations": ["create", "read", "mark_read", "delete"],
+      "indexes": ["from_user_id", "to_user_id", "is_read", "created_at"]
+    },
+    "maintenance_requests": {
+      "description": "Maintenance requests submitted by lodgers",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "tenant_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true
+        },
+        "category": {
+          "type": "enum",
+          "values": ["plumbing", "electrical", "heating", "appliance", "structural", "other"],
+          "required": true
+        },
+        "priority": {
+          "type": "enum",
+          "values": ["low", "medium", "high", "urgent"],
+          "default": "medium"
+        },
+        "description": {
+          "type": "text",
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["pending", "in_progress", "completed", "cancelled"],
+          "default": "pending"
+        },
+        "assigned_to": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "Staff or service user assigned"
+        },
+        "submitted_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "completed_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "photo_urls": {
+          "type": "json",
+          "nullable": true
+        },
+        "resolution_notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "tenant": "many-to-one (users)",
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "assigned_user": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "assign", "complete", "cancel"],
+      "indexes": ["tenant_id", "property_id", "status", "priority", "submitted_date"]
+    },
+    "service_user_tasks": {
+      "description": "Tasks assigned to service users (cleaners, contractors)",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "service_user_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "room_id": {
+          "type": "uuid",
+          "foreign_key": "rooms.id",
+          "nullable": true
+        },
+        "task_type": {
+          "type": "enum",
+          "values": ["cleaning", "deep_cleaning", "plumbing_repair", "electrical_check", "inspection", "garden_maintenance", "window_cleaning", "other"],
+          "required": true
+        },
+        "description": {
+          "type": "text",
+          "required": true
+        },
+        "status": {
+          "type": "enum",
+          "values": ["scheduled", "in_progress", "completed", "pending_verification", "verified", "rejected"],
+          "default": "scheduled"
+        },
+        "assigned_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "due_date": {
+          "type": "date",
+          "required": true
+        },
+        "completed_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "verified_by": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "Staff member who verified"
+        },
+        "verified_date": {
+          "type": "timestamp",
+          "nullable": true
+        },
+        "photo_urls": {
+          "type": "json",
+          "nullable": true,
+          "description": "Photos uploaded by service user"
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true
+        },
+        "rejection_reason": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "service_user": "many-to-one (users)",
+        "property": "many-to-one",
+        "room": "many-to-one",
+        "verified_by_user": "many-to-one (users)"
+      },
+      "operations": ["create", "read", "update", "assign", "complete", "upload_photos", "verify", "reject"],
+      "indexes": ["service_user_id", "property_id", "status", "due_date"]
+    },
+    "staff_property_assignments": {
+      "description": "Assignment of staff members to properties they manage",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "staff_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "required": true
+        },
+        "property_id": {
+          "type": "uuid",
+          "foreign_key": "properties.id",
+          "required": true
+        },
+        "assigned_date": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "is_active": {
+          "type": "boolean",
+          "default": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "relationships": {
+        "staff": "many-to-one (users)",
+        "property": "many-to-one"
+      },
+      "operations": ["create", "read", "update", "deactivate"],
+      "indexes": ["staff_id", "property_id", "is_active"]
+    },
+    "roles_permissions": {
+      "description": "Permission system for role-based access control",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "role": {
+          "type": "enum",
+          "values": ["admin", "staff", "landlord", "lodger", "service_user"],
+          "required": true,
+          "unique": true
+        },
+        "description": {
+          "type": "text"
+        },
+        "permissions": {
+          "type": "json",
+          "description": "Array of permission strings",
+          "required": true
+        },
+        "can_delete": {
+          "type": "boolean",
+          "default": false,
+          "description": "System roles cannot be deleted"
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "operations": ["read", "update"],
+      "indexes": ["role"]
+    },
+    "system_logs": {
+      "description": "Audit trail for all system activities",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "log_number": {
+          "type": "string",
+          "unique": true,
+          "example": "#L1245"
+        },
+        "user_id": {
+          "type": "uuid",
+          "foreign_key": "users.id",
+          "nullable": true,
+          "description": "Null for system-generated logs"
+        },
+        "action": {
+          "type": "string",
+          "required": true,
+          "example": "User Login, Inspection Completed, Property Updated"
+        },
+        "category": {
+          "type": "enum",
+          "values": ["authentication", "user_management", "properties", "inspection", "billing", "notifications", "complaints", "system"],
+          "required": true
+        },
+        "details": {
+          "type": "text",
+          "required": true
+        },
+        "severity": {
+          "type": "enum",
+          "values": ["info", "warning", "error"],
+          "default": "info"
+        },
+        "ip_address": {
+          "type": "string",
+          "nullable": true
+        },
+        "user_agent": {
+          "type": "text",
+          "nullable": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()",
+          "immutable": true
+        }
+      },
+      "relationships": {
+        "user": "many-to-one (users)"
+      },
+      "operations": ["create", "read"],
+      "note": "Logs cannot be updated or deleted - immutable audit trail",
+      "indexes": ["user_id", "category", "severity", "created_at"]
+    },
+    "system_settings": {
+      "description": "Global system configuration settings",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "setting_key": {
+          "type": "string",
+          "unique": true,
+          "required": true
+        },
+        "setting_value": {
+          "type": "json",
+          "required": true
+        },
+        "description": {
+          "type": "text"
+        },
+        "updated_by": {
+          "type": "uuid",
+          "foreign_key": "users.id"
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "operations": ["read", "update"],
+      "indexes": ["setting_key"]
+    },
+    "system_alerts": {
+      "description": "Real-time system alerts and events",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "primary_key": true
+        },
+        "alert_type": {
+          "type": "string",
+          "required": true
+        },
+        "priority": {
+          "type": "enum",
+          "values": ["low", "medium", "high"],
+          "default": "medium"
+        },
+        "message": {
+          "type": "text",
+          "required": true
+        },
+        "is_read": {
+          "type": "boolean",
+          "default": false
+        },
+        "created_at": {
+          "type": "timestamp",
+          "default": "now()"
+        }
+      },
+      "operations": ["create", "read", "mark_read", "delete"],
+      "indexes": ["priority", "is_read", "created_at"]
+    }
+  },
+  "enumerations": {
+    "user_roles": ["admin", "staff", "landlord", "lodger", "service_user"],
+    "user_status": ["active", "suspended", "on_leave"],
+    "property_types": ["studio", "1bed", "2bed", "3bed", "house", "hmo"],
+    "property_status": ["active", "inactive", "under_maintenance"],
+    "room_status": ["occupied", "vacant", "under_maintenance"],
+    "tenancy_status": ["active", "ending_soon", "ended", "terminated"],
+    "payment_types": ["rent", "deposit", "utilities", "extra_charge", "refund"],
+    "payment_status": ["pending", "paid", "overdue", "waived", "refunded"],
+    "payment_methods": ["card", "bank_transfer", "paypal", "cash"],
+    "extra_charge_reasons": ["missed_bin_duty", "damage_to_property", "deep_cleaning", "lost_key", "late_payment_fee", "maintenance_callout", "other"],
+    "extra_charge_status": ["outstanding", "paid", "waived"],
+    "inspection_types": ["routine", "quarterly", "annual", "move_in", "move_out", "pre_vacancy"],
+    "inspection_status": ["scheduled", "in_progress", "completed", "issues_found", "cancelled"],
+    "inspection_results": ["pass", "minor_issues", "action_required", "fail"],
+    "bin_types": ["general_waste", "recycling", "garden_waste", "mixed"],
+    "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+    "collection_frequency": ["weekly", "fortnightly", "monthly"],
+    "bin_rotation_status": ["active", "completed", "missed", "overdue"],
+    "complaint_categories": ["maintenance", "service_quality", "communication", "billing", "property_condition", "staff_conduct", "noise", "other"],
+    "complaint_status": ["received", "open", "in_progress", "resolved", "closed"],
+    "priority_levels": ["low", "medium", "high", "urgent"],
+    "document_types": ["tenancy_agreement", "id_verification", "reference_letter", "gas_safety_certificate", "electrical_safety_certificate", "epc_certificate", "inventory_report", "inspection_report", "insurance_document", "other"],
+    "document_status": ["valid", "expiring_soon", "expired"],
+    "meter_types": ["electricity", "gas", "water"],
+    "notification_types": ["bin_reminder", "payment_reminder", "inspection_notice", "extra_charge_alert", "maintenance_update", "general_notice", "complaint_update", "custom"],
+    "notification_channels": ["sms", "email", "in_app", "all"],
+    "notification_status": ["pending", "sent", "delivered", "failed", "read"],
+    "maintenance_categories": ["plumbing", "electrical", "heating", "appliance", "structural", "other"],
+    "maintenance_status": ["pending", "in_progress", "completed", "cancelled"],
+    "service_task_types": ["cleaning", "deep_cleaning", "plumbing_repair", "electrical_check", "inspection", "garden_maintenance", "window_cleaning", "other"],
+    "service_task_status": ["scheduled", "in_progress", "completed", "pending_verification", "verified", "rejected"],
+    "log_categories": ["authentication", "user_management", "properties", "inspection", "billing", "notifications", "complaints", "system"],
+    "log_severity": ["info", "warning", "error"]
+  },
+  "key_relationships": {
+    "user_to_properties": "landlords own properties",
+    "user_to_tenancies": "lodgers have tenancy agreements",
+    "user_to_rooms": "lodgers occupy rooms",
+    "property_to_rooms": "properties contain multiple rooms",
+    "property_to_inspections": "properties have regular inspections",
+    "property_to_bin_schedules": "each property has bin collection schedule",
+    "property_to_bin_rotations": "properties have weekly lodger rotation for bins",
+    "tenancy_to_payments": "each tenancy generates rent payments",
+    "tenant_to_complaints": "lodgers submit complaints",
+    "tenant_to_maintenance": "lodgers request maintenance",
+    "staff_to_properties": "staff are assigned to manage properties",
+    "staff_to_tasks": "staff verify service user tasks and inspections",
+    "service_user_to_tasks": "service users are assigned tasks to complete",
+    "property_to_documents": "properties have associated compliance documents",
+    "tenant_to_documents": "tenants have personal documents (ID, references)"
+  },
+  "search_and_filter_requirements": {
+    "users": ["role", "status", "name", "email", "last_active"],
+    "properties": ["landlord", "type", "status", "address", "postcode"],
+    "rooms": ["property", "status"],
+    "tenancies": ["tenant", "property", "status", "contract_end_date"],
+    "payments": ["tenant", "property", "status", "type", "due_date", "paid_date"],
+    "extra_charges": ["tenant", "property", "status", "reason"],
+    "inspections": ["property", "inspector", "status", "type", "scheduled_date", "result"],
+    "bin_rotations": ["property", "tenant", "status", "week_start_date"],
+    "complaints": ["tenant", "property", "status", "priority", "category", "submitted_date"],
+    "documents": ["tenant", "property", "type", "status", "expiry_date"],
+    "notifications": ["recipient", "status", "channel", "type", "sent_at"],
+    "messages": ["from_user", "to_user", "is_read", "created_at"],
+    "maintenance_requests": ["tenant", "property", "status", "priority", "category"],
+    "service_user_tasks": ["service_user", "property", "status", "task_type", "due_date"],
+    "system_logs": ["user", "category", "severity", "created_at"]
+  },
+  "sorting_requirements": {
+    "common_sorts": ["created_at DESC", "updated_at DESC", "name ASC"],
+    "payments": ["due_date ASC", "paid_date DESC", "amount DESC"],
+    "inspections": ["scheduled_date ASC", "completed_date DESC"],
+    "complaints": ["priority DESC", "submitted_date DESC", "status ASC"],
+    "documents": ["expiry_date ASC", "uploaded_date DESC"],
+    "notifications": ["sent_at DESC", "status ASC"],
+    "maintenance_requests": ["priority DESC", "submitted_date DESC"],
+    "service_user_tasks": ["due_date ASC", "status ASC"]
+  },
+  "validation_requirements": {
+    "email": "Must be valid email format",
+    "phone": "UK phone number format (+44 7xxx xxxxxx)",
+    "postcode": "UK postcode format",
+    "rent_amount": "Positive decimal with 2 decimal places",
+    "dates": "Valid date format, future dates where applicable",
+    "file_uploads": "Size limits, allowed file types (PDF, JPG, PNG)",
+    "text_fields": "Maximum character limits",
+    "numeric_fields": "Positive integers where applicable"
+  },
+  "special_business_rules": {
+    "bin_rotation": "Automatically rotate to next room weekly, send reminders, apply extra charges for missed duties",
+    "payment_reminders": "Auto-send reminders 7 days before due date, 1 day before, and on overdue",
+    "document_expiry": "Alert 30 days before document expiry",
+    "inspection_scheduling": "Auto-schedule quarterly inspections 90 days apart",
+    "complaint_escalation": "Auto-escalate high priority complaints if not assigned within 24 hours",
+    "tenancy_renewal": "Alert 60 days before contract end date",
+    "lease_ending": "Mark tenancy as 'ending_soon' 60 days before contract end",
+    "staff_activity_tracking": "Track all staff actions for audit purposes",
+    "service_user_verification": "Photos must be verified by staff within 48 hours",
+    "notification_retry": "Retry failed SMS/email 3 times with exponential backoff"
+  },
+  "reporting_requirements": {
+    "admin": [
+      "Monthly revenue report",
+      "Property occupancy rates",
+      "Payment collection rates",
+      "Outstanding payments report",
+      "Complaint resolution metrics",
+      "Staff performance report",
+      "Inspection completion rates",
+      "Document compliance status"
+    ],
+    "landlord": [
+      "Property income/expense statement",
+      "Tenant payment history",
+      "Property occupancy timeline",
+      "Maintenance costs breakdown",
+      "Document expiry alerts"
+    ],
+    "staff": [
+      "Assigned tasks overview",
+      "Inspection schedule",
+      "Outstanding complaints",
+      "Bin duty compliance",
+      "Service user task verification queue"
+    ]
+  },
+  "integration_points": {
+    "payment_gateway": "Stripe or similar for online payments",
+    "sms_provider": "Twilio or similar for SMS notifications",
+    "email_service": "SendGrid or similar for email notifications",
+    "file_storage": "AWS S3, Cloudinary, or similar for document/image storage",
+    "calendar_integration": "For inspection scheduling",
+    "notification_service": "Push notifications for mobile app"
+  },
+  "security_requirements": {
+    "authentication": "Supabase Auth with email/password",
+    "authorization": "Role-based access control (RBAC)",
+    "data_encryption": "Encrypt sensitive fields (passwords, payment details)",
+    "audit_logging": "Log all data modifications",
+    "file_access": "Secure file URLs with expiry/authentication",
+    "api_rate_limiting": "Prevent abuse",
+    "session_management": "Secure session handling with timeout"
+  },
+  "performance_considerations": {
+    "indexes": "Create indexes on all foreign keys and frequently queried fields",
+    "pagination": "Implement pagination for large lists (properties, payments, documents)",
+    "caching": "Cache frequently accessed data (user permissions, property lists)",
+    "file_storage": "Use CDN for document/image delivery",
+    "database_optimization": "Use views for complex queries, materialized views for reports",
+    "background_jobs": "Use queue for sending bulk notifications, generating reports"
+  },
+  "data_retention": {
+    "system_logs": "Retain for 12 months minimum",
+    "payments": "Retain indefinitely for accounting",
+    "documents": "Retain according to legal requirements",
+    "tenancies": "Retain for 7 years after end date",
+    "complaints": "Retain for 3 years after resolution",
+    "notifications": "Retain for 6 months",
+    "messages": "Retain for 1 year"
+  },
+  "implementation_notes": {
+    "database": "PostgreSQL (via Supabase)",
+    "orm": "Supabase client with TypeScript",
+    "migrations": "Use Supabase migrations for schema changes",
+    "seeding": "Create seed data for development/testing",
+    "testing": "Unit tests for business logic, integration tests for database operations",
+    "documentation": "Generate API documentation from schema",
+    "monitoring": "Set up monitoring for failed notifications, overdue tasks, system errors"
+  }
+}

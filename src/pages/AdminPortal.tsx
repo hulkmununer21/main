@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,8 @@ import ComplaintManagement from "./admin/ComplaintManagement";
 import DocumentManagement from "./admin/DocumentManagement";
 import RolePermissions from "./admin/RolePermissions";
 import SystemLogs from "./admin/SystemLogs";
+import PropertyManagement from "./admin/PropertyManagement";
+import UserManagement from "./admin/UserManagement";
 
 const AdminPortal = () => {
   const { logout, user } = useAuth();
@@ -256,107 +258,10 @@ const AdminPortal = () => {
             )}
 
             {/* Users Section */}
-            {currentTab === "users" && (
-              <Card>
-                <CardHeader>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <CardTitle>User Management</CardTitle>
-                      <CardDescription>Manage all system users</CardDescription>
-                    </div>
-                    <Button>Add User</Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {[
-                      { name: "John Smith", email: "john@example.com", role: "Lodger", status: "Active" },
-                      { name: "Sarah Wilson", email: "sarah@example.com", role: "Landlord", status: "Active" },
-                      { name: "Mike Johnson", email: "mike@example.com", role: "Staff", status: "Active" },
-                      { name: "Emma Davis", email: "emma@example.com", role: "Lodger", status: "Pending" },
-                    ].map((user, index) => (
-                      <Card key={index} className="border-border">
-                        <CardContent className="p-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-3 mb-2">
-                                <h4 className="font-semibold">{user.name}</h4>
-                                <Badge variant={user.role === "Lodger" ? "default" : user.role === "Landlord" ? "secondary" : "outline"}>
-                                  {user.role}
-                                </Badge>
-                                <Badge variant={user.status === "Active" ? "default" : "secondary"}>
-                                  {user.status}
-                                </Badge>
-                              </div>
-                              <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                <Mail className="w-3 h-3" />
-                                {user.email}
-                              </p>
-                            </div>
-                            <div className="flex gap-2">
-                              <Button size="icon" variant="ghost">
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button size="icon" variant="ghost">
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            {currentTab === "users" && <UserManagement />}
 
             {/* Properties Section */}
-            {currentTab === "properties" && (
-              <Card>
-                <CardHeader>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <CardTitle>Property Management</CardTitle>
-                      <CardDescription>Oversee all properties in the system</CardDescription>
-                    </div>
-                    <Button>Add Property</Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {[
-                      { name: "Modern City Centre Studio", address: "123 Main St, Manchester", status: "Occupied", rent: "£750/mo" },
-                      { name: "Riverside Apartment", address: "456 River Rd, Manchester", status: "Available", rent: "£850/mo" },
-                      { name: "Executive Penthouse", address: "789 High St, Manchester", status: "Occupied", rent: "£1,200/mo" },
-                      { name: "Garden View Flat", address: "321 Park Ave, Manchester", status: "Maintenance", rent: "£700/mo" },
-                    ].map((property, index) => (
-                      <Card key={index} className="border-border">
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <h4 className="font-semibold">{property.name}</h4>
-                                <Badge variant={property.status === "Occupied" ? "default" : property.status === "Available" ? "secondary" : "outline"}>
-                                  {property.status}
-                                </Badge>
-                              </div>
-                              <p className="text-sm text-muted-foreground flex items-center gap-1 mb-1">
-                                <MapPin className="w-3 h-3" />
-                                {property.address}
-                              </p>
-                              <p className="text-sm font-medium text-primary">{property.rent}</p>
-                            </div>
-                            <div className="flex gap-2">
-                              <Button size="sm">View</Button>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            {currentTab === "properties" && <PropertyManagement />}
 
             {/* Reports Section */}
             {currentTab === "reports" && (

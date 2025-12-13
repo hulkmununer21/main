@@ -1,87 +1,171 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useState, useEffect, ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/lib/supabaseClient";
+import { toast } from "sonner";
+import { 
+  AuthContext, 
+  User, 
+  LandlordProfile, 
+  LodgerProfile 
+} from "@/contexts/AuthContextTypes";
 
-interface User {
-  email: string;
-  role: "lodger" | "landlord" | "staff" | "admin";
-  name: string;
-}
+// Helper function to fetch user profile based on role
+const profileTables: Record<User["role"], string> = {
+  landlord: "landlord_profiles",
+  lodger: "lodger_profiles",
+  staff: "staff_profiles",
+  admin: "admin_profiles",
+  service_user: "service_user_profiles",
+};
 
-interface AuthContextType {
-  user: User | null;
-  login: (email: string, password: string, role: string) => void;
-  logout: () => void;
-  isAuthenticated: boolean;
-}
+const fetchUserProfile = async (userId: string, role: User["role"]) => {
+  let profile = null;
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
+  const tableName = profileTables[role];
+  if (tableName) {
+    const result = await supabase.from(tableName).select("*").eq("user_id", userId).single();
+    profile = result.data;
   }
-  return context;
+
+  return profile;
 };
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    // Check for stored user session
+  const [user, setUser] = useState<User | null>(() => {
+    // Load user from localStorage on initial load
     const storedUser = localStorage.getItem("domus-user");
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
+    return storedUser ? JSON.parse(storedUser) : null;
+  });
+  const navigate = useNavigate();
+
+  // Listen to Supabase auth state changes
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session) {
+        setUser(null);
+        localStorage.removeItem("domus-user");
+      }
+    });
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
-  const login = (email: string, password: string, role: string) => {
-    // Simulate login - in production, this would call an API
+  const login = async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || !data.user) {
+      toast.error("Invalid email or password.");
+      throw new Error(error?.message || "Login failed");
+    }
+
+    const userId = data.user.id;
+
+    // Get role from user_roles table
+    const { data: roleData } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId)
+      .single();
+
+    const role = roleData?.role;
+    if (!role) {
+      toast.error("No role assigned to this user.");
+      throw new Error("No role assigned to this user.");
+    }
+
+    // Fetch profile
+    const profile = await fetchUserProfile(userId, role);
+
+    if (!profile) {
+      toast.error("User profile not found. Please contact support.");
+      throw new Error("User profile not found.");
+    }
+
+    // Update last_login timestamp
+    const profileTable = profileTables[role];
+    if (profileTable) {
+      await supabase
+        .from(profileTable)
+        .update({ last_login: new Date().toISOString() })
+        .eq("user_id", userId);
+    }
+
     const userData: User = {
+      id: userId,
       email,
-      role: role as User["role"],
-      name: email.split("@")[0],
+      role,
+      name: profile.full_name || email.split("@")[0],
+      profile: profile,
     };
 
     setUser(userData);
     localStorage.setItem("domus-user", JSON.stringify(userData));
 
-    // Check if this is a mobile context by checking the path
-    const isMobileFlow = location.pathname.includes('/mobile') || 
-                         location.pathname.includes('/onboarding') ||
-                         location.pathname.includes('/app');
+    // Redirect based on role
+    const routes: Record<User["role"], string> = {
+      lodger: "/lodger-portal",
+      landlord: "/landlord-portal",
+      staff: "/staff-portal",
+      admin: "/admin-portal",
+      service_user: "/serviceuser/dashboard",
+    };
+    navigate(routes[role]);
+  };
 
-    // Redirect based on context and role
-    if (isMobileFlow) {
-      navigate("/mobile-home");
-    } else {
-      const routes = {
-        lodger: "/lodger-portal",
-        landlord: "/landlord-portal",
-        staff: "/staff-portal",
-        admin: "/admin-portal",
-      };
-      navigate(routes[role as keyof typeof routes]);
+  const signup = async (
+    email: string,
+    password: string,
+    role: "lodger" | "landlord",
+    profileData: { full_name: string; phone?: string; [key: string]: unknown }
+  ) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error || !data.user) {
+      toast.error(error?.message || "Signup failed");
+      throw new Error(error?.message || "Signup failed");
     }
+    const userId = data.user.id;
+
+    // Insert into profile table with full_name as required field
+    const profileTable = role === "landlord" ? "landlord_profiles" : "lodger_profiles";
+    const { error: profileError } = await supabase
+      .from(profileTable)
+      .insert([{ 
+        user_id: userId, 
+        email, 
+        full_name: profileData.full_name,
+        ...profileData 
+      }]);
+
+    if (profileError) {
+      toast.error("Failed to create profile: " + profileError.message);
+      throw new Error(profileError.message);
+    }
+
+    // Insert into user_roles
+    const { error: roleError } = await supabase
+      .from("user_roles")
+      .insert([{ user_id: userId, role, is_active: true }]);
+
+    if (roleError) {
+      toast.error("Failed to assign role: " + roleError.message);
+      throw new Error(roleError.message);
+    }
+
+    toast.success("Account created successfully! Please log in.");
+    
+    // Auto-login after signup
+    await login(email, password);
   };
 
   const logout = () => {
     setUser(null);
     localStorage.removeItem("domus-user");
+    supabase.auth.signOut();
     navigate("/login");
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        login,
-        logout,
-        isAuthenticated: !!user,
-      }}
-    >
+    <AuthContext.Provider value={{ user, login, signup, logout, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );

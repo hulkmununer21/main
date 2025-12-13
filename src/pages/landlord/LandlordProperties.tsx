@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Bell, LogOut, Plus, Building, MapPin, Bed, Bath, Square, Edit, Eye, Calendar, Trash2, ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { BottomNav } from "@/components/mobile/BottomNav";

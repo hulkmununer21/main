@@ -1,10 +1,10 @@
 import { ReactNode, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 
 interface ProtectedRouteProps {
   children: ReactNode;
-  allowedRoles?: Array<"lodger" | "landlord" | "staff" | "admin">;
+  allowedRoles?: Array<"lodger" | "landlord" | "staff" | "admin" | "service_user">;
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
@@ -19,11 +19,12 @@ const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
 
     if (allowedRoles && user && !allowedRoles.includes(user.role)) {
       // Redirect to their appropriate portal
-      const routes = {
+      const routes: Record<string, string> = {
         lodger: "/lodger-portal",
         landlord: "/landlord-portal",
         staff: "/staff-portal",
         admin: "/admin-portal",
+        service_user: "/serviceuser/dashboard",
       };
       navigate(routes[user.role], { replace: true });
     }

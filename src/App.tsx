@@ -10,6 +10,7 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import StaffLogin from "./pages/StaffLogin";
 import AdminLogin from "./pages/AdminLogin";
+import ServiceUserLogin from "./pages/ServiceUserLogin";
 import Signup from "./pages/Signup";
 import AppSplash from "./pages/AppSplash";
 import Onboarding from "./pages/Onboarding";
@@ -42,6 +43,10 @@ import FAQ from "./pages/FAQ";
 import SubmitComplaint from "./pages/SubmitComplaint";
 import ContactPage from "./pages/ContactPage";
 import NotFound from "./pages/NotFound";
+import ServiceUserDashboard from "./pages/serviceuser/ServiceUserDashboard";
+import ServiceUserTasks from "./pages/serviceuser/ServiceUserTasks";
+import ServiceUserUploads from "./pages/serviceuser/ServiceUserUploads";
+import ServiceUserProfile from "./pages/serviceuser/ServiceUserProfile";
 
 const queryClient = new QueryClient();
 
@@ -58,6 +63,7 @@ const App = () => (
             <Route path="/login" element={<Login />} />
             <Route path="/staff-login" element={<StaffLogin />} />
             <Route path="/admin-login" element={<AdminLogin />} />
+            <Route path="/serviceuser-login" element={<ServiceUserLogin />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/app" element={<AppSplash />} />
             <Route path="/onboarding" element={<Onboarding />} />
@@ -230,6 +236,39 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["admin"]}>
                   <AdminPortal />
+                </ProtectedRoute>
+              }
+            />
+            {/* Service User Protected Routes */}
+            <Route
+              path="/serviceuser/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["service_user"]}>
+                  <ServiceUserDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/serviceuser/tasks"
+              element={
+                <ProtectedRoute allowedRoles={["service_user"]}>
+                  <ServiceUserTasks />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/serviceuser/uploads"
+              element={
+                <ProtectedRoute allowedRoles={["service_user"]}>
+                  <ServiceUserUploads />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/serviceuser/profile"
+              element={
+                <ProtectedRoute allowedRoles={["service_user"]}>
+                  <ServiceUserProfile />
                 </ProtectedRoute>
               }
             />

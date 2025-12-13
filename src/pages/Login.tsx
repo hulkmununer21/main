@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
@@ -13,13 +13,26 @@ import { cn } from "@/lib/utils";
 
 const Login = () => {
   const { login } = useAuth();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [form, setForm] = useState({ email: "", password: "" });
   const [userType, setUserType] = useState("lodger");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    login(email, password, userType);
+    setLoading(true);
+    setError(null);
+    try {
+      await login(form.email, form.password);
+    } catch (err) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Login failed");
+    }
+    setLoading(false);
   };
 
   const roleOptions = [
@@ -126,10 +139,11 @@ const Login = () => {
                     <Label htmlFor="email">Email Address</Label>
                     <Input
                       id="email"
+                      name="email"
                       type="email"
                       placeholder="john.doe@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      value={form.email}
+                      onChange={handleChange}
                       required
                       className="h-11"
                     />
@@ -147,10 +161,11 @@ const Login = () => {
                     </div>
                     <Input
                       id="password"
+                      name="password"
                       type="password"
                       placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      value={form.password}
+                      onChange={handleChange}
                       required
                       className="h-11"
                     />
@@ -160,9 +175,12 @@ const Login = () => {
                     type="submit"
                     className="w-full h-11 text-base font-semibold"
                     size="lg"
+                    disabled={loading}
                   >
-                    Sign In
+                    {loading ? "Signing in..." : "Sign In"}
                   </Button>
+
+                  {error && <div className="text-red-500 text-sm text-center">{error}</div>}
 
                   <div className="text-center pt-4 space-y-2">
                     <p className="text-sm text-muted-foreground">

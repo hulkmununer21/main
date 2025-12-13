@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { Users } from "lucide-react";
@@ -16,7 +16,7 @@ const StaffLogin = () => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    login(email, password, "staff");
+    login(email, password);
   };
 
   return (
