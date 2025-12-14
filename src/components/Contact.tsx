@@ -5,7 +5,8 @@ import { Textarea } from "@/components/ui/textarea";
 
 const Contact = () => {
   const handleWhatsAppClick = () => {
-    window.open("https://wa.me/447000000000", "_blank");
+    // Updated WhatsApp Number
+    window.open("https://wa.me/447383925298", "_blank");
   };
 
   return (
@@ -30,13 +31,14 @@ const Contact = () => {
                 </div>
                 <div className="min-w-0">
                   <div className="font-semibold text-foreground mb-1 text-sm sm:text-base">
-                    Phone
+                    Office Number
                   </div>
+                  {/* Updated Office Number */}
                   <a
-                    href="tel:+447000000000"
+                    href="tel:01902214066"
                     className="text-sm sm:text-base text-muted-foreground hover:text-accent transition-colors break-all"
                   >
-                    +44 (0) 7000 000 000
+                    01902 214 066
                   </a>
                 </div>
               </div>
@@ -64,12 +66,13 @@ const Contact = () => {
                 </div>
                 <div>
                   <div className="font-semibold text-foreground mb-1 text-sm sm:text-base">
-                    Office
+                    Office Address
                   </div>
+                  {/* Updated Address */}
                   <p className="text-sm sm:text-base text-muted-foreground">
-                    123 Business Street
+                    Liana Gardens
                     <br />
-                    Manchester, M1 1AA
+                    Wolverhampton, WV2 2AD
                     <br />
                     United Kingdom
                   </p>
@@ -117,7 +120,7 @@ const Contact = () => {
                 <label className="text-sm font-medium text-foreground mb-2 block">
                   Phone Number
                 </label>
-                <Input type="tel" placeholder="+44 7000 000000" className="h-10 sm:h-12 text-base" />
+                <Input type="tel" placeholder="07000 000000" className="h-10 sm:h-12 text-base" />
               </div>
               <div>
                 <label className="text-sm font-medium text-foreground mb-2 block">

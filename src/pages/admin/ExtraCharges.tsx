@@ -20,9 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CreditCard, AlertCircle, CheckCircle, Clock, ImageIcon, Trash2, Plus, FileText } from "lucide-react";
+import { CreditCard, AlertCircle, CheckCircle, Clock, Plus, FileText, Trash2 } from "lucide-react";
 import { format } from "date-fns";
-import { jsPDF } from "jspdf"; // Requires: npm install jspdf
+import { jsPDF } from "jspdf";
 
 // === INTERFACES ===
 
@@ -38,10 +38,8 @@ interface ExtraCharge {
   created_at: string;
   reason: string;
   evidence_urls: string[];
-  // Joined fields
   lodger_profiles?: { full_name: string; email?: string };
   properties?: { property_name: string; address_line1?: string; postcode?: string };
-  // We fetch payment details for the receipt
   payments?: { 
     payment_reference: string; 
     payment_date: string; 
@@ -52,6 +50,7 @@ interface ExtraCharge {
 interface ActiveTenancyOption {
   id: string;
   lodger_id: string;
+  user_id: string; // The Auth User ID (Required for Notification)
   property_id: string;
   room_id: string;
   lodger_name: string;
@@ -94,7 +93,7 @@ const ExtraCharges = () => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // Updated Query: Now joins 'payments' table to get the reference
+      // 1. Fetch Charges
       const { data: chargesData, error: chargesError } = await supabase
         .from('extra_charges')
         .select(`
@@ -107,6 +106,8 @@ const ExtraCharges = () => {
 
       if (chargesError) throw chargesError;
 
+      // 2. Fetch Active Tenancies AND the linked user_id
+      // We need user_id to send notifications to the right person
       const { data: tenancyData, error: tenancyError } = await supabase
         .from('tenancies')
         .select(`
@@ -114,7 +115,7 @@ const ExtraCharges = () => {
           lodger_id,
           property_id,
           room_id,
-          lodger_profiles (full_name),
+          lodger_profiles!inner (full_name, user_id), 
           properties (property_name),
           rooms (room_number)
         `)
@@ -122,17 +123,24 @@ const ExtraCharges = () => {
 
       if (tenancyError) throw tenancyError;
 
-      const formattedTenancies: ActiveTenancyOption[] = (tenancyData || []).map((t: any) => ({
-        id: t.id,
-        lodger_id: t.lodger_id,
-        property_id: t.property_id,
-        room_id: t.room_id,
-        lodger_name: Array.isArray(t.lodger_profiles) ? t.lodger_profiles[0]?.full_name : t.lodger_profiles?.full_name,
-        property_name: Array.isArray(t.properties) ? t.properties[0]?.property_name : t.properties?.property_name,
-        room_number: Array.isArray(t.rooms) ? t.rooms[0]?.room_number : t.rooms?.room_number,
-      }));
+      const formattedTenancies: ActiveTenancyOption[] = (tenancyData || []).map((t: any) => {
+        // Handle potential array vs object returns from Supabase joins
+        const profile = Array.isArray(t.lodger_profiles) ? t.lodger_profiles[0] : t.lodger_profiles;
+        const prop = Array.isArray(t.properties) ? t.properties[0] : t.properties;
+        const room = Array.isArray(t.rooms) ? t.rooms[0] : t.rooms;
 
-      // Map Supabase response to Interface (handling array vs object for joined fields)
+        return {
+          id: t.id,
+          lodger_id: t.lodger_id,
+          user_id: profile?.user_id, // This is the UUID we need for notifications
+          property_id: t.property_id,
+          room_id: t.room_id,
+          lodger_name: profile?.full_name || "Unknown",
+          property_name: prop?.property_name || "Unknown",
+          room_number: room?.room_number || "N/A",
+        };
+      });
+
       const formattedCharges: ExtraCharge[] = (chargesData || []).map((c: any) => ({
         ...c,
         lodger_profiles: Array.isArray(c.lodger_profiles) ? c.lodger_profiles[0] : c.lodger_profiles,
@@ -157,23 +165,17 @@ const ExtraCharges = () => {
 
 
   // --- RECEIPT GENERATION LOGIC ---
-
   const generateReceipt = (charge: ExtraCharge) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     
-    // --- Header Section ---
     doc.setFontSize(22);
     doc.text("PAYMENT RECEIPT", pageWidth / 2, 20, { align: "center" });
-    
     doc.setFontSize(10);
     doc.text("Domus Servitia Property Management", pageWidth / 2, 28, { align: "center" });
-    
-    // Draw Line
     doc.setLineWidth(0.5);
     doc.line(20, 35, pageWidth - 20, 35);
 
-    // --- Transaction Details ---
     const paymentRef = charge.payments?.payment_reference || "N/A";
     const paymentDate = charge.payments?.payment_date 
       ? format(new Date(charge.payments.payment_date), 'dd MMM yyyy') 
@@ -183,7 +185,6 @@ const ExtraCharges = () => {
     doc.text(`Receipt #: ${paymentRef}`, 20, 50);
     doc.text(`Date: ${paymentDate}`, pageWidth - 70, 50);
 
-    // --- Bill To Section ---
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.text("Received From:", 20, 65);
@@ -199,40 +200,33 @@ const ExtraCharges = () => {
         doc.text(charge.properties.postcode, pageWidth - 70, 77);
     }
 
-    // --- Table Header ---
     const startY = 90;
     doc.setFillColor(240, 240, 240);
     doc.rect(20, startY, pageWidth - 40, 10, "F");
-    
     doc.setFont("helvetica", "bold");
     doc.text("Description", 25, startY + 7);
     doc.text("Amount", pageWidth - 40, startY + 7, { align: "right" });
 
-    // --- Table Content ---
     doc.setFont("helvetica", "normal");
     doc.text(charge.reason || charge.charge_type, 25, startY + 20);
     doc.text(`£${charge.amount.toFixed(2)}`, pageWidth - 40, startY + 20, { align: "right" });
 
-    // --- Totals ---
     doc.setLineWidth(0.5);
     doc.line(20, startY + 30, pageWidth - 20, startY + 30);
-    
     doc.setFont("helvetica", "bold");
     doc.text("TOTAL PAID", pageWidth - 70, startY + 40);
     doc.text(`£${charge.amount.toFixed(2)}`, pageWidth - 40, startY + 40, { align: "right" });
 
-    // --- Footer Status ---
     doc.setFontSize(14);
-    doc.setTextColor(0, 128, 0); // Green color
+    doc.setTextColor(0, 128, 0); 
     doc.text("PAID IN FULL", pageWidth / 2, startY + 60, { align: "center" });
     
-    // Save file
     doc.save(`Receipt_${paymentRef}.pdf`);
     toast.success("Receipt generated");
   };
 
 
-  // --- HANDLERS (Same as before) ---
+  // --- HANDLERS ---
 
   const handleAddCharge = async () => {
     if (!chargeForm.tenancy_id || !chargeForm.amount || !chargeForm.charge_type) {
@@ -246,21 +240,48 @@ const ExtraCharges = () => {
       if (!selectedTenancy) throw new Error("Invalid tenancy selected");
 
       const dbChargeType = CHARGE_TYPE_MAP[chargeForm.charge_type];
+      const chargeReason = chargeForm.description || chargeForm.charge_type;
 
+      // 1. Create the Charge
       const payload = {
         lodger_id: selectedTenancy.lodger_id,
         property_id: selectedTenancy.property_id,
         tenancy_id: selectedTenancy.id,
         amount: parseFloat(chargeForm.amount),
         charge_type: dbChargeType, 
-        reason: chargeForm.description || chargeForm.charge_type, 
+        reason: chargeReason, 
         charge_status: 'pending',
         due_date: chargeForm.due_date,
         created_at: new Date().toISOString()
       };
 
-      const { error } = await supabase.from('extra_charges').insert(payload);
-      if (error) throw error;
+      const { error: chargeError } = await supabase.from('extra_charges').insert(payload);
+      if (chargeError) throw chargeError;
+
+      // 2. CREATE NOTIFICATION FOR LODGER
+      if (selectedTenancy.user_id) {
+        console.log("Attempting to send notification to:", selectedTenancy.user_id);
+        
+        const { error: notifError } = await supabase.from('notifications').insert({
+            recipient_id: selectedTenancy.user_id, // From tenancy query
+            subject: 'New Extra Charge Added',
+            message_body: `A new charge of £${chargeForm.amount} for "${chargeReason}" has been added to your account.`,
+            notification_type: 'in_app', // Required
+            priority: 'medium', // Likely Required
+            
+            created_at: new Date().toISOString()
+        });
+        
+        if (notifError) {
+            console.error("Failed to send notification:", notifError);
+            toast.error("Charge created, but notification failed: " + notifError.message);
+        } else {
+            console.log("Notification sent successfully");
+        }
+      } else {
+          console.warn("Could not send notification: No user_id found for this lodger.");
+          toast.warning("Charge created, but lodger has no linked user account for notifications.");
+      }
 
       toast.success("Charge added successfully");
       setDialogOpen(false);
@@ -302,7 +323,7 @@ const ExtraCharges = () => {
             payment_date: new Date().toISOString(),
             payment_method: 'bank_transfer', 
             payment_reference: paymentRef,
-            description: `Payment for charge: ${charge.reason || charge.charge_type}` // Using description as per schema check
+            description: `Payment for charge: ${charge.reason || charge.charge_type}` 
           })
           .select('id')
           .single();
@@ -454,7 +475,6 @@ const ExtraCharges = () => {
                                 <Badge variant={badgeVariant} className="capitalize">
                                   {charge.charge_status.replace(/_/g, ' ')}
                                 </Badge>
-                                {/* Only show View Receipt button if status is PAID */}
                                 {charge.charge_status === 'paid' && (
                                     <Button 
                                         size="sm" 
@@ -503,7 +523,7 @@ const ExtraCharges = () => {
         </CardContent>
       </Card>
 
-      {/* Charge Reasons Reference & Dialog Components remain unchanged */}
+      {/* Charge Reasons Reference & Dialog Components */}
       <Card>
         <CardHeader>
           <CardTitle>Common Charge Reasons</CardTitle>

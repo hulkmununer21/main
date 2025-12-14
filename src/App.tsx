@@ -6,6 +6,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ScrollToTop from "./components/ScrollToTop";
+
+// Public Pages
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import StaffLogin from "./pages/StaffLogin";
@@ -19,22 +21,6 @@ import Properties from "./pages/Properties";
 import PropertyDetail from "./pages/PropertyDetail";
 import About from "./pages/About";
 import ServicesPage from "./pages/ServicesPage";
-import LodgerPortal from "./pages/LodgerPortal";
-import LodgerOverview from "./pages/lodger/LodgerOverview";
-import LodgerPayments from "./pages/lodger/LodgerPayments";
-import LodgerMaintenance from "./pages/lodger/LodgerMaintenance";
-import LodgerMessages from "./pages/lodger/LodgerMessages";
-import LodgerProfile from "./pages/lodger/LodgerProfile";
-import LandlordPortal from "./pages/LandlordPortal";
-import LandlordOverview from "./pages/landlord/LandlordOverview";
-import LandlordProperties from "./pages/landlord/LandlordProperties";
-import LandlordTenants from "./pages/landlord/LandlordTenants";
-import LandlordFinancials from "./pages/landlord/LandlordFinancials";
-import LandlordProfile from "./pages/landlord/LandlordProfile";
-import StaffOverview from "./pages/staff/StaffOverview";
-import StaffPortal from "./pages/StaffPortal";
-import AdminOverview from "./pages/admin/AdminOverview";
-import AdminPortal from "./pages/AdminPortal";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import Cookies from "./pages/Cookies";
@@ -43,6 +29,26 @@ import FAQ from "./pages/FAQ";
 import SubmitComplaint from "./pages/SubmitComplaint";
 import ContactPage from "./pages/ContactPage";
 import NotFound from "./pages/NotFound";
+
+// Lodger Pages
+import LodgerPortal from "./pages/LodgerPortal";
+import LodgerProfile from "./pages/lodger/LodgerProfile";
+
+// Landlord Pages
+import LandlordPortal from "./pages/LandlordPortal";
+import LandlordProperties from "./pages/landlord/LandlordProperties";
+import LandlordTenants from "./pages/landlord/LandlordTenants";
+import LandlordFinancials from "./pages/landlord/LandlordFinancials";
+import LandlordProfile from "./pages/landlord/LandlordProfile";
+
+// Staff Pages
+import StaffOverview from "./pages/staff/StaffOverview";
+import StaffPortal from "./pages/StaffPortal";
+
+// Admin Pages
+import AdminPortal from "./pages/AdminPortal";
+
+// Service User Pages
 import ServiceUserDashboard from "./pages/serviceuser/ServiceUserDashboard";
 import ServiceUserTasks from "./pages/serviceuser/ServiceUserTasks";
 import ServiceUserUploads from "./pages/serviceuser/ServiceUserUploads";
@@ -59,6 +65,7 @@ const App = () => (
         <ScrollToTop />
         <AuthProvider>
           <Routes>
+            {/* --- PUBLIC ROUTES --- */}
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/staff-login" element={<StaffLogin />} />
@@ -79,6 +86,8 @@ const App = () => (
             <Route path="/faq" element={<FAQ />} />
             <Route path="/submit-complaint" element={<SubmitComplaint />} />
             <Route path="/contact" element={<ContactPage />} />
+
+            {/* --- LODGER ROUTES --- */}
             <Route
               path="/lodger-portal"
               element={
@@ -87,30 +96,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/lodger-portal/payments"
-              element={
-                <ProtectedRoute allowedRoles={["lodger"]}>
-                  <LodgerPayments />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/lodger-portal/maintenance"
-              element={
-                <ProtectedRoute allowedRoles={["lodger"]}>
-                  <LodgerMaintenance />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/lodger-portal/messages"
-              element={
-                <ProtectedRoute allowedRoles={["lodger"]}>
-                  <LodgerMessages />
-                </ProtectedRoute>
-              }
-            />
+            {/* Kept separate as settings often require a dedicated page */}
             <Route
               path="/lodger-portal/profile"
               element={
@@ -119,6 +105,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+
+            {/* --- LANDLORD ROUTES --- */}
             <Route
               path="/landlord-portal"
               element={
@@ -159,6 +147,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+
+            {/* --- STAFF ROUTES --- */}
             <Route
               path="/staff-portal"
               element={
@@ -199,6 +189,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+
+            {/* --- ADMIN ROUTES --- */}
             <Route
               path="/admin-portal"
               element={
@@ -239,7 +231,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            {/* Service User Protected Routes */}
+
+            {/* --- SERVICE USER ROUTES --- */}
             <Route
               path="/serviceuser/dashboard"
               element={
@@ -272,7 +265,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+
+            {/* --- 404 --- */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
