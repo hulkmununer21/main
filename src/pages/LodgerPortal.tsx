@@ -1,9 +1,16 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Home, CreditCard, FileText, MessageSquare, User, LogOut, Wrench, Loader2 } from "lucide-react";
+import { Home, CreditCard, FileText, MessageSquare, User, LogOut, Wrench, Loader2, ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogHeader, 
+  DialogTitle, 
+  DialogFooter, 
+  DialogTrigger
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,11 +20,15 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/useAuth";
-import { format, parseISO, startOfWeek, differenceInDays, addMonths, isAfter, setDate, startOfDay } from "date-fns";
+import { format, parseISO, startOfWeek, differenceInDays, startOfDay } from "date-fns";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 
+// === SUB-COMPONENTS ===
 import LodgerOverview from "./lodger/LodgerOverview";
+import LodgerInspections from "./lodger/LodgerInspections"; 
+import LodgerMessages from "./lodger/LodgerMessages"; 
+import LodgerDocuments from "./lodger/LodgerDocuments"; // ✅ IMPORTED
 
 // --- INTERFACES ---
 interface ExtraCharge { id: string; reason: string; amount: number; due_date: string; created_at: string; charge_status: string; description?: string; }
@@ -205,13 +216,8 @@ const LodgerPortal = () => {
     } catch (e: any) { toast.error(e.message); }
   };
 
-  // Simulate Payment of an Extra Charge
   const handlePayCharge = async (chargeId: string, amount: number) => {
     toast.success(`Redirecting to payment gateway for £${amount}...`);
-    // Ideally this would:
-    // 1. Create a Stripe/PayPal session
-    // 2. On success webhook, update DB 'extra_charges' -> status: 'paid'
-    // For now we just show a toast
   };
 
   const handlePaymentMock = () => { toast.success("Payment Gateway not integrated yet."); setIsPaymentDialogOpen(false); };
@@ -220,6 +226,7 @@ const LodgerPortal = () => {
 
   const navigationItems = [
     { id: "overview", label: "Dashboard", icon: Home },
+    { id: "inspections", label: "Inspections", icon: ClipboardCheck },
     { id: "payments", label: "Payments", icon: CreditCard },
     { id: "maintenance", label: "Maintenance", icon: Wrench },
     { id: "messages", label: "Messages", icon: MessageSquare },
@@ -283,13 +290,23 @@ const LodgerPortal = () => {
                     nextDate: councilBin ? format(parseISO(councilBin.next_collection_date), 'PP') : "N/A", 
                     daysUntil: councilBin ? differenceInDays(parseISO(councilBin.next_collection_date), new Date()) : "N/A" 
                 }}
+                inspection={{ nextDate: null, status: '', daysUntil: null }}
                 notifications={notifications}
                 onMarkNotificationRead={handleMarkAsRead}
                 onCompleteBinDuty={handleCompleteBinDuty}
               />
             )}
+
+            {currentTab === "inspections" && (
+                <LodgerInspections 
+                    tenancy={{
+                        property_id: tenancy?.property_id,
+                        room_id: tenancy?.room_id,
+                        rooms: tenancy?.rooms
+                    }}
+                />
+            )}
             
-            {/* === UPDATED PAYMENTS TAB === */}
             {currentTab === "payments" && (
                 <div className="space-y-8 max-w-[1600px]">
                     <div className="flex justify-between items-center">
@@ -297,7 +314,6 @@ const LodgerPortal = () => {
                         <Button onClick={() => setIsPaymentDialogOpen(true)}><CreditCard className="mr-2 h-4 w-4"/> Make Rent Payment</Button>
                     </div>
 
-                    {/* 1. OUTSTANDING CHARGES */}
                     {charges.filter(c => c.charge_status === 'pending').length > 0 && (
                         <div className="space-y-4">
                             <h3 className="text-lg font-semibold flex items-center gap-2 text-red-700">
@@ -335,7 +351,6 @@ const LodgerPortal = () => {
                         </div>
                     )}
 
-                    {/* 2. PAYMENT HISTORY */}
                     <div className="space-y-4">
                         <h3 className="text-lg font-semibold">Payment History</h3>
                         <Card>
@@ -360,7 +375,6 @@ const LodgerPortal = () => {
                 </div>
             )}
 
-            {/* TAB 3: MAINTENANCE */}
             {currentTab === "maintenance" && (
                 <div className="space-y-6 max-w-[1600px]">
                     <div className="flex justify-between"><h2 className="text-2xl font-bold">Maintenance</h2><Dialog open={isMaintenanceDialogOpen} onOpenChange={setIsMaintenanceDialogOpen}><DialogTrigger asChild><Button><Wrench className="mr-2 h-4 w-4"/> Report Issue</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Report Issue</DialogTitle></DialogHeader><div className="space-y-4"><div><Label>Category</Label><Select value={maintenanceCategory} onValueChange={setMaintenanceCategory}><SelectTrigger><SelectValue placeholder="Select..."/></SelectTrigger><SelectContent><SelectItem value="plumbing">Plumbing</SelectItem><SelectItem value="electrical">Electrical</SelectItem><SelectItem value="other">Other</SelectItem></SelectContent></Select></div><div><Label>Description</Label><Textarea value={maintenanceIssue} onChange={e=>setMaintenanceIssue(e.target.value)}/></div></div><DialogFooter><Button onClick={handleMaintenanceSubmit}>Submit</Button></DialogFooter></DialogContent></Dialog></div>
@@ -384,7 +398,16 @@ const LodgerPortal = () => {
                 </div>
             )}
 
-            {(currentTab === "messages" || currentTab === "documents") && <div className="flex flex-col items-center justify-center h-[50vh] text-center"><div className="bg-muted p-6 rounded-full mb-4"><MessageSquare className="h-10 w-10 text-muted-foreground" /></div><h3 className="text-xl font-semibold">Coming Soon</h3><p className="text-muted-foreground mt-2">Feature unavailable.</p></div>}
+            {currentTab === "messages" && <LodgerMessages />}
+
+            {/* ✅ DOCUMENTS TAB */}
+            {currentTab === "documents" && (
+                tenancy ? <LodgerDocuments tenancyId={tenancy.id} /> : 
+                <div className="flex flex-col items-center justify-center h-[50vh] text-center text-muted-foreground">
+                    <FileText className="h-12 w-12 mb-3 opacity-20" />
+                    <p>No active tenancy found.</p>
+                </div>
+            )}
           </main>
         </div>
         

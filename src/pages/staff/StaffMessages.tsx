@@ -1,223 +1,405 @@
-import { MessageSquare, Send, User, Users, Clock } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { 
+  MessageSquare, Send, User, Users, Clock, Loader2, 
+  Paperclip, File, X, ImageIcon 
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/contexts/useAuth";
+import { toast } from "sonner";
+import { format, formatDistanceToNow, parseISO } from "date-fns";
+
+// === TYPES ===
+interface Thread {
+  id: string;
+  participants: string[];
+  last_message_preview: string;
+  updated_at: string;
+  subject?: string;
+  other_user?: {
+    name: string;
+    role: 'Admin' | 'Service User' | 'Unknown';
+    id: string;
+  };
+}
+
+interface Message {
+  id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+  attachments?: { name: string; type: string; url: string }[]; // ✅ Added
+  is_read: boolean;
+}
 
 const StaffMessages = () => {
-  const [newMessage, setNewMessage] = useState("");
-  const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false); // ✅ Added
+  
+  // Data Buckets
+  const [adminThreads, setAdminThreads] = useState<Thread[]>([]);
+  const [serviceUserThreads, setServiceUserThreads] = useState<Thread[]>([]);
+  const [activeMessages, setActiveMessages] = useState<Message[]>([]);
+  
+  // UI State
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [newMessageText, setNewMessageText] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null); // ✅ Added
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // ✅ Added
 
-  const adminMessages = [
-    { id: 1, from: "Admin - James", subject: "Weekly Schedule Update", preview: "Please review the updated inspection schedule...", time: "2 hours ago", unread: true },
-    { id: 2, from: "Admin - Sarah", subject: "New Property Assignment", preview: "You have been assigned to a new property at...", time: "Yesterday", unread: true },
-    { id: 3, from: "Admin - James", subject: "Re: Maintenance Request", preview: "Thank you for the update. Please proceed with...", time: "2 days ago", unread: false },
-  ];
+  // --- 1. FETCH THREADS & CATEGORIZE ---
+  useEffect(() => {
+    if (!user) return;
 
-  const serviceUserMessages = [
-    { id: 1, from: "John D. (Service User)", subject: "Task Completed - Kitchen Clean", property: "123 Main St", preview: "I have completed the kitchen cleaning task...", time: "3 hours ago", unread: true },
-    { id: 2, from: "Sarah M. (Service User)", subject: "Question about task", property: "456 River Rd", preview: "Hi, I wanted to ask about the bathroom...", time: "5 hours ago", unread: false },
-    { id: 3, from: "Mike R. (Service User)", subject: "Garden Work Done", property: "789 High St", preview: "Finished all the garden maintenance as...", time: "Yesterday", unread: false },
-  ];
+    const fetchThreads = async () => {
+      setLoading(true);
+      try {
+        const { data: threads, error } = await supabase
+          .from('message_threads')
+          .select('*')
+          .contains('participants', [user.id])
+          .order('updated_at', { ascending: false });
 
-  const conversationMessages = [
-    { id: 1, sender: "Admin - James", content: "Hi, please review the updated inspection schedule for next week.", time: "2 hours ago", isMe: false },
-    { id: 2, sender: "You", content: "Thanks James, I'll review it now. Any priority properties I should focus on?", time: "1 hour ago", isMe: true },
-    { id: 3, sender: "Admin - James", content: "Yes, please prioritize 123 Main St and 456 River Rd - they have inspections due this week.", time: "45 mins ago", isMe: false },
-  ];
+        if (error) throw error;
+
+        const rawThreads = threads || [];
+        const allParticipantIds = [...new Set(
+            rawThreads.flatMap(t => t.participants).filter(id => id !== user.id)
+        )];
+        
+        const [adminRes, suRes] = await Promise.all([
+          supabase.from('admin_profiles').select('user_id, full_name').in('user_id', allParticipantIds),
+          supabase.from('service_user_profiles').select('user_id, full_name').in('user_id', allParticipantIds)
+        ]);
+
+        const profileMap: Record<string, { name: string, role: 'Admin' | 'Service User' }> = {};
+        adminRes.data?.forEach((p: any) => { profileMap[p.user_id] = { name: p.full_name, role: 'Admin' }; });
+        suRes.data?.forEach((p: any) => { profileMap[p.user_id] = { name: p.full_name, role: 'Service User' }; });
+
+        const admins: Thread[] = [];
+        const serviceUsers: Thread[] = [];
+
+        rawThreads.forEach(t => {
+          const otherId = t.participants.find((id: string) => id !== user.id);
+          const profile = otherId ? profileMap[otherId] : null;
+          
+          if (profile) {
+              const enhancedThread = { ...t, other_user: { ...profile, id: otherId! } };
+              if (profile.role === 'Admin') admins.push(enhancedThread);
+              else if (profile.role === 'Service User') serviceUsers.push(enhancedThread);
+          }
+        });
+
+        setAdminThreads(admins);
+        setServiceUserThreads(serviceUsers);
+
+      } catch (error) {
+        console.error("Error fetching threads", error);
+        toast.error("Could not load messages");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchThreads();
+
+    const threadSub = supabase
+      .channel('staff_threads')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_threads' }, () => { fetchThreads(); })
+      .subscribe();
+
+    return () => { supabase.removeChannel(threadSub); };
+  }, [user]);
+
+  // --- 2. FETCH MESSAGES ---
+  useEffect(() => {
+    if (!activeThreadId) return;
+
+    const fetchMessages = async () => {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('thread_id', activeThreadId)
+        .order('created_at', { ascending: true });
+      
+      setActiveMessages(data || []);
+      scrollToBottom();
+    };
+
+    fetchMessages();
+
+    const msgSub = supabase
+      .channel(`staff_chat:${activeThreadId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `thread_id=eq.${activeThreadId}` }, (payload) => {
+        setActiveMessages(prev => [...prev, payload.new as Message]);
+        scrollToBottom();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(msgSub); };
+  }, [activeThreadId]);
+
+  const scrollToBottom = () => {
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  };
+
+  // --- 3. FILE HANDLING (NEW) ---
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        setSelectedFile(e.target.files[0]);
+    }
+  };
+
+  const clearAttachment = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // --- 4. SEND MESSAGE (UPDATED) ---
+  const handleSendMessage = async () => {
+    if (!activeThreadId || !user) return;
+    if (!newMessageText.trim() && !selectedFile) return;
+    
+    setSending(true); // Acts as general loading state
+
+    let attachments = [];
+
+    // A. Upload File First
+    if (selectedFile) {
+        setUploading(true);
+        const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
+        const filePath = `${activeThreadId}/${Date.now()}_${sanitizedName}`;
+        
+        try {
+            const { error: uploadError } = await supabase.storage.from('chat-attachments').upload(filePath, selectedFile);
+            if (uploadError) throw uploadError;
+            
+            const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
+            attachments.push({ name: selectedFile.name, type: selectedFile.type, url: data.publicUrl });
+        } catch (e: any) {
+            toast.error("Upload failed: " + e.message);
+            setUploading(false);
+            setSending(false);
+            return;
+        }
+        setUploading(false);
+    }
+
+    // B. Insert Message
+    try {
+      const { error } = await supabase.from('messages').insert({
+        thread_id: activeThreadId,
+        sender_id: user.id,
+        content: newMessageText,
+        attachments: attachments.length > 0 ? attachments : null
+      });
+
+      if (error) throw error;
+      
+      setNewMessageText("");
+      clearAttachment();
+    } catch (error) {
+      toast.error("Failed to send");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (loading) return <div className="h-96 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+
+  // Props to pass down
+  const messageProps = {
+    activeThreadId,
+    setActiveThreadId,
+    messages: activeMessages,
+    currentUserId: user?.id,
+    messageText: newMessageText,
+    setNewMessageText,
+    handleSendMessage,
+    sending,
+    messagesEndRef,
+    // File Props
+    selectedFile,
+    handleFileSelect,
+    clearAttachment,
+    fileInputRef,
+    uploading
+  };
 
   return (
     <div className="space-y-6">
       <Tabs defaultValue="admin" className="w-full">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="admin" className="flex items-center gap-2">
-            <User className="w-4 h-4" />
-            Admin Messages
-            <Badge variant="destructive" className="ml-1">2</Badge>
+            <User className="w-4 h-4" /> Admin <Badge variant="secondary" className="ml-1">{adminThreads.length}</Badge>
           </TabsTrigger>
           <TabsTrigger value="service-users" className="flex items-center gap-2">
-            <Users className="w-4 h-4" />
-            Service User Messages
-            <Badge variant="destructive" className="ml-1">1</Badge>
+            <Users className="w-4 h-4" /> Service Users <Badge variant="secondary" className="ml-1">{serviceUserThreads.length}</Badge>
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="admin" className="mt-6">
-          <div className="grid lg:grid-cols-3 gap-6">
-            {/* Message List */}
-            <Card className="lg:col-span-1">
-              <CardHeader>
-                <CardTitle className="text-lg">Admin Conversations</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {adminMessages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                        selectedConversation === `admin-${msg.id}` 
-                          ? "bg-primary/10 border-primary" 
-                          : msg.unread 
-                            ? "bg-muted/50" 
-                            : "hover:bg-muted/50"
-                      }`}
-                      onClick={() => setSelectedConversation(`admin-${msg.id}`)}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="font-medium text-sm">{msg.from}</p>
-                        {msg.unread && <Badge variant="destructive" className="text-xs">New</Badge>}
-                      </div>
-                      <p className="text-sm font-medium text-foreground">{msg.subject}</p>
-                      <p className="text-xs text-muted-foreground truncate">{msg.preview}</p>
-                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {msg.time}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Conversation View */}
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-lg">
-                  {selectedConversation ? "Conversation" : "Select a conversation"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {selectedConversation ? (
-                  <div className="space-y-4">
-                    <div className="h-[300px] overflow-y-auto space-y-3 p-4 bg-muted/30 rounded-lg">
-                      {conversationMessages.map((msg) => (
-                        <div
-                          key={msg.id}
-                          className={`flex ${msg.isMe ? "justify-end" : "justify-start"}`}
-                        >
-                          <div
-                            className={`max-w-[70%] p-3 rounded-lg ${
-                              msg.isMe
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-card border"
-                            }`}
-                          >
-                            <p className="text-xs font-medium mb-1">{msg.sender}</p>
-                            <p className="text-sm">{msg.content}</p>
-                            <p className="text-xs opacity-70 mt-1">{msg.time}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Textarea
-                        placeholder="Type your message..."
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        className="min-h-[80px]"
-                      />
-                      <Button className="self-end">
-                        <Send className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-[400px] flex items-center justify-center text-muted-foreground">
-                    <div className="text-center">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p>Select a conversation to view messages</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <MessageInterface threads={adminThreads} title="Admin Conversations" {...messageProps} />
         </TabsContent>
 
         <TabsContent value="service-users" className="mt-6">
-          <div className="grid lg:grid-cols-3 gap-6">
-            {/* Message List */}
-            <Card className="lg:col-span-1">
-              <CardHeader>
-                <CardTitle className="text-lg">Service User Conversations</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {serviceUserMessages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                        selectedConversation === `su-${msg.id}` 
-                          ? "bg-primary/10 border-primary" 
-                          : msg.unread 
-                            ? "bg-muted/50" 
-                            : "hover:bg-muted/50"
-                      }`}
-                      onClick={() => setSelectedConversation(`su-${msg.id}`)}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="font-medium text-sm">{msg.from}</p>
-                        {msg.unread && <Badge variant="destructive" className="text-xs">New</Badge>}
-                      </div>
-                      <p className="text-sm font-medium text-foreground">{msg.subject}</p>
-                      <p className="text-xs text-muted-foreground">{msg.property}</p>
-                      <p className="text-xs text-muted-foreground truncate mt-1">{msg.preview}</p>
-                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {msg.time}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Conversation View */}
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-lg">
-                  {selectedConversation?.startsWith('su-') ? "Conversation" : "Select a conversation"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {selectedConversation?.startsWith('su-') ? (
-                  <div className="space-y-4">
-                    <div className="h-[300px] overflow-y-auto space-y-3 p-4 bg-muted/30 rounded-lg">
-                      <div className="flex justify-start">
-                        <div className="max-w-[70%] p-3 rounded-lg bg-card border">
-                          <p className="text-xs font-medium mb-1">John D. (Service User)</p>
-                          <p className="text-sm">I have completed the kitchen cleaning task. All photos have been uploaded.</p>
-                          <p className="text-xs opacity-70 mt-1">3 hours ago</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Textarea
-                        placeholder="Type your message to this service user..."
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        className="min-h-[80px]"
-                      />
-                      <Button className="self-end">
-                        <Send className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-[400px] flex items-center justify-center text-muted-foreground">
-                    <div className="text-center">
-                      <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p>Select a conversation to view messages</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <MessageInterface threads={serviceUserThreads} title="Service User Conversations" {...messageProps} />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+};
+
+// --- REUSABLE UI COMPONENT (UPDATED) ---
+const MessageInterface = ({ 
+  threads, activeThreadId, setActiveThreadId, messages, currentUserId, 
+  messageText, setNewMessageText, handleSendMessage, sending, messagesEndRef, title,
+  // File Props
+  selectedFile, handleFileSelect, clearAttachment, fileInputRef, uploading
+}: any) => {
+  
+  const activeThreadData = threads.find((t: Thread) => t.id === activeThreadId);
+
+  return (
+    <div className="grid lg:grid-cols-3 gap-6 h-[600px]">
+      {/* Sidebar List */}
+      <Card className="lg:col-span-1 flex flex-col">
+        <CardHeader className="py-4">
+          <CardTitle className="text-lg flex justify-between items-center">
+            {title}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto p-2">
+          <div className="space-y-2">
+            {threads.length === 0 ? <p className="text-sm text-center text-muted-foreground py-8">No messages found.</p> :
+            threads.map((thread: Thread) => (
+              <div
+                key={thread.id}
+                className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                  activeThreadId === thread.id ? "bg-primary/10 border-primary" : "hover:bg-muted/50"
+                }`}
+                onClick={() => setActiveThreadId(thread.id)}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <p className="font-medium text-sm">{thread.other_user?.name}</p>
+                  <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground border">{thread.other_user?.role}</span>
+                </div>
+                <p className="text-sm font-medium text-foreground truncate">{thread.subject || "Conversation"}</p>
+                <p className="text-xs text-muted-foreground truncate">{thread.last_message_preview}</p>
+                <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1 justify-end">
+                  <Clock className="w-3 h-3" />
+                  {formatDistanceToNow(parseISO(thread.updated_at), { addSuffix: true })}
+                </p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Chat Window */}
+      <Card className="lg:col-span-2 flex flex-col">
+        <CardHeader className="py-4 border-b">
+          <CardTitle className="text-lg">
+            {activeThreadData ? (
+                <div className="flex flex-col">
+                    <span>{activeThreadData.other_user?.name}</span>
+                    <span className="text-xs font-normal text-muted-foreground">{activeThreadData.other_user?.role}</span>
+                </div>
+            ) : "Select a conversation"}
+          </CardTitle>
+        </CardHeader>
+        
+        <CardContent className="flex-1 flex flex-col p-0">
+          {activeThreadId ? (
+            <>
+              {/* Messages Area */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-muted/10">
+                {messages.map((msg: Message) => {
+                    const isMe = msg.sender_id === currentUserId;
+                    return (
+                        <div key={msg.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+                            <div className={`max-w-[75%] p-3 rounded-lg text-sm ${isMe ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-card border rounded-tl-none"}`}>
+                                {/* ✅ Render Attachments */}
+                                {msg.attachments && msg.attachments.length > 0 && (
+                                    <div className="mb-2 space-y-2">
+                                        {msg.attachments.map((att, idx) => (
+                                            <div key={idx}>
+                                                {att.type.startsWith('image') ? 
+                                                    <img src={att.url} alt="attachment" className="rounded-md max-h-48 object-cover border" /> : 
+                                                    <a href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-black/10 p-2 rounded hover:bg-black/20 text-xs text-white/90 underline"><File className="h-4 w-4" /> {att.name}</a>
+                                                }
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <p>{msg.content}</p>
+                                <p className={`text-[10px] mt-1 text-right ${isMe ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                                    {format(parseISO(msg.created_at), 'p')}
+                                </p>
+                            </div>
+                        </div>
+                    )
+                })}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Input Area */}
+              <div className="p-4 bg-background border-t">
+                {/* ✅ Attachment Preview */}
+                {selectedFile && (
+                    <div className="flex items-center gap-3 mb-3 p-2 bg-muted/30 rounded border w-fit">
+                        {selectedFile.type.startsWith('image') ? (
+                            <img src={URL.createObjectURL(selectedFile)} className="h-10 w-10 object-cover rounded" />
+                        ) : (
+                            <div className="h-10 w-10 bg-gray-200 rounded flex items-center justify-center"><File className="h-5 w-5 text-gray-500" /></div>
+                        )}
+                        <div className="text-xs">
+                            <p className="font-medium max-w-[150px] truncate">{selectedFile.name}</p>
+                            <p className="text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 ml-2" onClick={clearAttachment}>
+                            <X className="h-3 w-3" />
+                        </Button>
+                    </div>
+                )}
+
+                <div className="flex gap-2 items-end">
+                    <div className="flex gap-2 pb-2">
+                        {/* ✅ Hidden File Input & Trigger */}
+                        <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
+                        <Button variant="outline" size="icon" className={`shrink-0 ${selectedFile ? 'text-primary border-primary' : ''}`} onClick={() => fileInputRef.current?.click()}>
+                            {selectedFile ? <ImageIcon className="h-4 w-4"/> : <Paperclip className="h-4 w-4" />}
+                        </Button>
+                    </div>
+                    <Textarea
+                        placeholder="Type your message..."
+                        value={messageText}
+                        onChange={(e) => setNewMessageText(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                        className="min-h-[60px] resize-none"
+                    />
+                    <Button className="self-end h-[60px] w-[60px]" onClick={handleSendMessage} disabled={sending || uploading}>
+                        {uploading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4" />}
+                    </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+              <MessageSquare className="w-12 h-12 mb-2 opacity-20" />
+              <p>Select a thread to start chatting</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };

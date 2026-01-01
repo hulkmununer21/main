@@ -1,495 +1,471 @@
-import { useState } from "react";
-import { Bell, LogOut, Plus, Building, MapPin, Bed, Bath, Square, Edit, Eye, Calendar, Trash2, ClipboardCheck } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { 
+  Home, Calendar, ClipboardCheck, DollarSign, MessageSquare, LogOut, 
+  Building, Users, Bed, ChevronDown, ChevronUp, AlertCircle, CheckCircle, X, Loader2
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/useAuth";
+import { toast } from "sonner";
+import { supabase } from "@/lib/supabaseClient";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
-import { BottomNav } from "@/components/mobile/BottomNav";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { format, parseISO } from "date-fns";
 
-const LandlordProperties = () => {
-  const { logout } = useAuth();
-  const [isAddPropertyOpen, setIsAddPropertyOpen] = useState(false);
-  const [isPropertyDetailOpen, setIsPropertyDetailOpen] = useState(false);
-  const [selectedProperty, setSelectedProperty] = useState<any>(null);
-  const [propertyForm, setPropertyForm] = useState({
-    name: "",
-    address: "",
-    type: "",
-    bedrooms: "",
-    bathrooms: "",
-    rent: "",
-    description: ""
-  });
+const LandlordPortal = () => {
+  const { logout, user } = useAuth();
+  const [currentTab, setCurrentTab] = useState("overview");
+  const [loading, setLoading] = useState(true);
 
-  const properties = [
-    {
-      id: 1,
-      name: "Modern City Centre Studio",
-      address: "Manchester, M1 1AA",
-      type: "Studio",
-      bedrooms: 1,
-      bathrooms: 1,
-      sqft: 450,
-      rent: 750,
-      status: "Occupied",
-      tenant: "John Smith",
-      image: "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=400",
-      binSchedule: {
-        nextCollection: "2025-11-25",
-        collectionDay: "Monday",
-        binRotation: "Lodgers rotate weekly - John handles bins this week"
-      },
-      inspections: {
-        nextInspection: "2025-12-01",
-        lastInspection: "2025-10-15",
-        history: [
-          { date: "2025-10-15", type: "Quarterly", status: "Passed", notes: "Property in excellent condition" },
-          { date: "2025-07-10", type: "Quarterly", status: "Passed", notes: "Minor cleaning required in bathroom" },
-          { date: "2025-04-05", type: "Quarterly", status: "Passed", notes: "All areas satisfactory" }
-        ]
+  // --- DATA STATE ---
+  const [properties, setProperties] = useState<any[]>([]);
+  const [tenancies, setTenancies] = useState<any[]>([]);
+  const [schedules, setSchedules] = useState<any[]>([]);
+  const [reports, setReports] = useState<any[]>([]); // Only Inspections for now
+  const [financials, setFinancials] = useState<{outstanding: number, collected: number}>({ outstanding: 0, collected: 0 });
+  
+  // Cache for lookup names
+  const [inspectorNames, setInspectorNames] = useState<Record<string, string>>({});
+  const [lodgerNames, setLodgerNames] = useState<Record<string, any>>({});
+
+  // --- UI STATES ---
+  const [expandedPropId, setExpandedPropId] = useState<string | null>(null);
+  const [isMessageOpen, setIsMessageOpen] = useState(false);
+  const [messageBody, setMessageBody] = useState("");
+  const [selectedReport, setSelectedReport] = useState<any>(null);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+
+  // --- 1. DATA FETCHING ---
+  const fetchData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      // A. Fetch Properties (With Rooms)
+      // Note: If 'rooms(*)' fails with 400, remove it and fetch rooms separately.
+      // Assuming FK properties.id -> rooms.property_id exists.
+      const { data: props, error: propError } = await supabase
+        .from('properties')
+        .select(`*, rooms(*)`);
+      
+      if (propError) throw propError;
+      setProperties(props || []);
+
+      const propIds = props?.map(p => p.id) || [];
+
+      if (propIds.length > 0) {
+        // B. Fetch Tenancies (RAW - No Joins to avoid 400)
+        const { data: tenData } = await supabase
+          .from('tenancies')
+          .select('*')
+          .in('property_id', propIds)
+          .eq('tenancy_status', 'active');
+        
+        const rawTenancies = tenData || [];
+
+        // Manual Join for Lodgers (Safer)
+        const lodgerIds = rawTenancies.map((t: any) => t.lodger_id).filter(Boolean);
+        const { data: lodgers } = await supabase.from('lodger_profiles').select('id, full_name, email, phone_number').in('id', lodgerIds);
+        
+        const lodgerMap: Record<string, any> = {};
+        lodgers?.forEach((l: any) => lodgerMap[l.id] = l);
+        setLodgerNames(lodgerMap);
+        setTenancies(rawTenancies);
+
+        // C. Fetch Schedules (Bin)
+        const { data: binData } = await supabase
+          .from('bin_schedules')
+          .select('*, properties(property_name)')
+          .in('property_id', propIds)
+          .gte('next_collection_date', new Date().toISOString())
+          .order('next_collection_date', { ascending: true });
+        
+        setSchedules(binData || []);
+
+        // D. Fetch Inspections (RAW - No Joins to avoid 400)
+        const { data: inspData } = await supabase
+          .from('inspections')
+          .select('*') // Getting raw IDs
+          .in('property_id', propIds)
+          .neq('inspection_status', 'scheduled') 
+          .order('scheduled_date', { ascending: false });
+        
+        const rawReports = inspData || [];
+        setReports(rawReports);
+
+        // Manual Join for Inspectors
+        const staffIds = rawReports.filter((r: any) => r.inspector_type === 'staff').map((r: any) => r.inspector_id);
+        const serviceIds = rawReports.filter((r: any) => r.inspector_type === 'service_user').map((r: any) => r.inspector_id);
+        
+        const iNames: Record<string, string> = {};
+        
+        if (staffIds.length > 0) {
+            const { data: s } = await supabase.from('staff_profiles').select('id, full_name').in('id', staffIds);
+            s?.forEach((x: any) => iNames[x.id] = x.full_name);
+        }
+        if (serviceIds.length > 0) {
+            const { data: s } = await supabase.from('service_user_profiles').select('id, full_name').in('id', serviceIds);
+            s?.forEach((x: any) => iNames[x.id] = x.full_name);
+        }
+        setInspectorNames(iNames);
+
+        // E. Financials
+        const { data: chargeData } = await supabase
+          .from('extra_charges')
+          .select('amount, charge_status')
+          .in('property_id', propIds);
+
+        const outstanding = chargeData?.filter(c => ['pending', 'overdue'].includes(c.charge_status)).reduce((acc, curr) => acc + (curr.amount || 0), 0) || 0;
+        const collected = chargeData?.filter(c => c.charge_status === 'paid').reduce((acc, curr) => acc + (curr.amount || 0), 0) || 0;
+        setFinancials({ outstanding, collected });
       }
-    },
-    {
-      id: 2,
-      name: "Riverside Apartment",
-      address: "Bristol, BS1 5TH",
-      type: "1 Bed",
-      bedrooms: 1,
-      bathrooms: 1,
-      sqft: 550,
-      rent: 950,
-      status: "Occupied",
-      tenant: "Sarah Johnson",
-      image: "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400",
-      binSchedule: {
-        nextCollection: "2025-11-27",
-        collectionDay: "Wednesday",
-        binRotation: "Single tenant - responsible for all bin management"
-      },
-      inspections: {
-        nextInspection: "2025-11-28",
-        lastInspection: "2025-09-20",
-        history: [
-          { date: "2025-09-20", type: "Quarterly", status: "Passed", notes: "Property well maintained" },
-          { date: "2025-06-15", type: "Quarterly", status: "Passed", notes: "No issues found" }
-        ]
-      }
-    },
-    {
-      id: 3,
-      name: "Cozy 1-Bed Flat",
-      address: "Leeds, LS1 4AP",
-      type: "1 Bed",
-      bedrooms: 1,
-      bathrooms: 1,
-      sqft: 500,
-      rent: 650,
-      status: "Available",
-      tenant: null,
-      image: "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=400",
-      binSchedule: {
-        nextCollection: "2025-11-26",
-        collectionDay: "Tuesday",
-        binRotation: "Currently unoccupied - staff maintaining bins"
-      },
-      inspections: {
-        nextInspection: "2025-11-22",
-        lastInspection: "2025-10-30",
-        history: [
-          { date: "2025-10-30", type: "Pre-vacancy", status: "Passed", notes: "Ready for new tenant" },
-          { date: "2025-08-12", type: "Quarterly", status: "Passed", notes: "Previous tenant maintained well" }
-        ]
-      }
-    },
+
+    } catch (error) {
+      console.error("Error loading landlord data:", error);
+      toast.error("Could not load full dashboard data.");
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // --- HELPERS ---
+  const handleSendMessage = async () => {
+    if (!messageBody) return;
+    try {
+      await supabase.from('notifications').insert({
+        recipient_id: user?.id, // Temporary: sending to self for test
+        subject: `Landlord Message from ${user?.email}`,
+        message_body: messageBody,
+        notification_type: 'support',
+      });
+      toast.success("Message sent.");
+      setIsMessageOpen(false);
+      setMessageBody("");
+    } catch (e) {
+      toast.error("Failed to send.");
+    }
+  };
+
+  const getOccupancyColor = (rooms: any[]) => {
+    if (!rooms) return "bg-gray-100";
+    const total = rooms.length;
+    const occupied = rooms.filter(r => r.status === 'occupied').length;
+    if (total === 0) return "bg-gray-100 text-gray-600";
+    if (occupied === total) return "bg-green-100 text-green-700";
+    if (occupied === 0) return "bg-red-100 text-red-700";
+    return "bg-yellow-100 text-yellow-700";
+  };
+
+  const navItems = [
+    { id: "overview", label: "Dashboard", icon: Home },
+    { id: "properties", label: "Properties", icon: Building },
+    { id: "tenants", label: "Tenants", icon: Users },
+    { id: "schedules", label: "Schedules", icon: Calendar },
+    { id: "reports", label: "Service Reports", icon: ClipboardCheck },
+    { id: "financials", label: "Financials", icon: DollarSign },
   ];
 
-  const handleAddProperty = () => {
-    toast({
-      title: "Property Added",
-      description: `${propertyForm.name} has been added to your portfolio.`
-    });
-    setIsAddPropertyOpen(false);
-    setPropertyForm({
-      name: "",
-      address: "",
-      type: "",
-      bedrooms: "",
-      bathrooms: "",
-      rent: "",
-      description: ""
-    });
-  };
-
-  const handleEditProperty = (property: any) => {
-    setPropertyForm({
-      name: property.name,
-      address: property.address,
-      type: property.type,
-      bedrooms: property.bedrooms.toString(),
-      bathrooms: property.bathrooms.toString(),
-      rent: property.rent.toString(),
-      description: ""
-    });
-    setIsAddPropertyOpen(true);
-    toast({
-      title: "Edit Mode",
-      description: "Update the property details below."
-    });
-  };
-
-  const handleViewProperty = (property: any) => {
-    setSelectedProperty(property);
-    setIsPropertyDetailOpen(true);
-  };
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary" /></div>;
 
   return (
     <>
-      <SEO 
-        title="Properties - Landlord Portal"
-        description="Manage your property portfolio"
-      />
-      <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-6 pb-24 md:pb-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <img src={logo} alt="Logo" className="h-10 w-10 rounded-lg" />
-              <div>
-                <h1 className="text-2xl font-bold">Properties</h1>
-                <p className="text-sm text-muted-foreground">Manage your portfolio</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="icon">
-                <Bell className="h-5 w-5" />
-              </Button>
-              <Button variant="ghost" size="icon" onClick={logout}>
-                <LogOut className="h-5 w-5" />
-              </Button>
-            </div>
+      <SEO title="Landlord Portal" description="Property Management Overview" />
+      <div className="min-h-screen bg-background flex">
+        
+        {/* Sidebar */}
+        <aside className="w-64 border-r bg-card min-h-screen sticky top-0 flex flex-col">
+          <div className="p-6 border-b">
+            <Link to="/" className="flex items-center gap-3">
+              <img src={logo} alt="Domus Logo" className="h-10 w-10 rounded-lg" />
+              <div><h2 className="font-bold text-lg">Domus</h2><p className="text-xs text-muted-foreground">Landlord Portal</p></div>
+            </Link>
           </div>
-
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <p className="text-3xl font-bold">{properties.length}</p>
-              <p className="text-sm text-muted-foreground">Total Properties</p>
-            </div>
-            <Dialog open={isAddPropertyOpen} onOpenChange={setIsAddPropertyOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Property
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Add New Property</DialogTitle>
-                  <DialogDescription>Enter the details of your new property</DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="name">Property Name</Label>
-                      <Input
-                        id="name"
-                        value={propertyForm.name}
-                        onChange={(e) => setPropertyForm({...propertyForm, name: e.target.value})}
-                        placeholder="Modern City Centre Studio"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="type">Property Type</Label>
-                      <Select value={propertyForm.type} onValueChange={(value) => setPropertyForm({...propertyForm, type: value})}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="studio">Studio</SelectItem>
-                          <SelectItem value="1bed">1 Bedroom</SelectItem>
-                          <SelectItem value="2bed">2 Bedrooms</SelectItem>
-                          <SelectItem value="3bed">3 Bedrooms</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="address">Address</Label>
-                    <Input
-                      id="address"
-                      value={propertyForm.address}
-                      onChange={(e) => setPropertyForm({...propertyForm, address: e.target.value})}
-                      placeholder="123 Main Street, City, Postcode"
-                    />
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="bedrooms">Bedrooms</Label>
-                      <Input
-                        id="bedrooms"
-                        type="number"
-                        value={propertyForm.bedrooms}
-                        onChange={(e) => setPropertyForm({...propertyForm, bedrooms: e.target.value})}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="bathrooms">Bathrooms</Label>
-                      <Input
-                        id="bathrooms"
-                        type="number"
-                        value={propertyForm.bathrooms}
-                        onChange={(e) => setPropertyForm({...propertyForm, bathrooms: e.target.value})}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="rent">Rent (£/month)</Label>
-                      <Input
-                        id="rent"
-                        type="number"
-                        value={propertyForm.rent}
-                        onChange={(e) => setPropertyForm({...propertyForm, rent: e.target.value})}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="description">Description</Label>
-                    <Textarea
-                      id="description"
-                      value={propertyForm.description}
-                      onChange={(e) => setPropertyForm({...propertyForm, description: e.target.value})}
-                      placeholder="Property description and features..."
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsAddPropertyOpen(false)}>Cancel</Button>
-                  <Button onClick={handleAddProperty}>Add Property</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-4">
-            {properties.map((property) => (
-              <Card key={property.id} className="overflow-hidden">
-                <img
-                  src={property.image}
-                  alt={property.name}
-                  className="w-full h-48 object-cover"
-                />
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h3 className="font-semibold text-lg mb-1">{property.name}</h3>
-                      <p className="text-sm text-muted-foreground flex items-center gap-1">
-                        <MapPin className="h-3 w-3" />
-                        {property.address}
-                      </p>
-                    </div>
-                    <Badge variant={property.status === "Occupied" ? "default" : "secondary"}>
-                      {property.status}
-                    </Badge>
-                  </div>
-                  <Separator className="my-3" />
-                  <div className="grid grid-cols-3 gap-2 mb-3 text-sm">
-                    <div className="flex items-center gap-1 text-muted-foreground">
-                      <Bed className="h-4 w-4" />
-                      <span>{property.bedrooms} bed</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-muted-foreground">
-                      <Bath className="h-4 w-4" />
-                      <span>{property.bathrooms} bath</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-muted-foreground">
-                      <Square className="h-4 w-4" />
-                      <span>{property.sqft} sqft</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-2xl font-bold text-accent">£{property.rent}/mo</span>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => handleEditProperty(property)}>
-                        <Edit className="h-4 w-4 mr-1" />
-                        Edit
-                      </Button>
-                      <Button size="sm" onClick={() => handleViewProperty(property)}>
-                        <Eye className="h-4 w-4 mr-1" />
-                        View
-                      </Button>
-                    </div>
-                  </div>
-                  {property.tenant && (
-                    <div className="mt-3 pt-3 border-t">
-                      <p className="text-sm text-muted-foreground">Current Tenant</p>
-                      <p className="text-sm font-medium">{property.tenant}</p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+          <nav className="flex-1 p-4 space-y-1">
+            {navItems.map((item) => (
+              <Button key={item.id} variant={currentTab === item.id ? "secondary" : "ghost"} className={cn("w-full justify-start gap-3 h-11", currentTab === item.id && "bg-secondary font-medium")} onClick={() => setCurrentTab(item.id)}>
+                <item.icon className="h-5 w-5" /> {item.label}
+              </Button>
             ))}
+          </nav>
+          <div className="p-4 border-t space-y-1">
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={logout}><LogOut className="h-5 w-5" /> Sign Out</Button>
           </div>
+        </aside>
 
-          <div className="h-20 md:h-0"></div>
+        {/* Main Content */}
+        <div className="flex-1 flex flex-col">
+          <header className="h-16 border-b bg-card px-8 flex items-center justify-between sticky top-0 z-10">
+            <div>
+              <h1 className="text-xl font-semibold capitalize">{navItems.find(n => n.id === currentTab)?.label}</h1>
+              <p className="text-sm text-muted-foreground">Portfolio Overview</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button variant="outline" onClick={() => setIsMessageOpen(true)}>
+                <MessageSquare className="h-4 w-4 mr-2" /> Message Admin
+              </Button>
+            </div>
+          </header>
+
+          <main className="flex-1 p-8 overflow-auto bg-muted/30">
+            
+            {/* === TAB: OVERVIEW === */}
+            {currentTab === "overview" && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <Card>
+                    <CardContent className="p-6 flex items-center gap-4">
+                      <div className="h-12 w-12 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600"><Building className="h-6 w-6"/></div>
+                      <div><p className="text-sm text-muted-foreground">Properties</p><p className="text-2xl font-bold">{properties.length}</p></div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-6 flex items-center gap-4">
+                      <div className="h-12 w-12 rounded-lg bg-green-100 flex items-center justify-center text-green-600"><Users className="h-6 w-6"/></div>
+                      <div><p className="text-sm text-muted-foreground">Active Tenants</p><p className="text-2xl font-bold">{tenancies.length}</p></div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-6 flex items-center gap-4">
+                      <div className="h-12 w-12 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600"><AlertCircle className="h-6 w-6"/></div>
+                      <div><p className="text-sm text-muted-foreground">Outstanding Charges</p><p className="text-2xl font-bold text-orange-600">£{financials.outstanding}</p></div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            )}
+
+            {/* === TAB: PROPERTIES === */}
+            {currentTab === "properties" && (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold">My Properties</h2>
+                    <div className="grid gap-6">
+                        {properties.map((property) => {
+                            const rooms = property.rooms || [];
+                            const occupiedCount = rooms.filter((r: any) => r.status === 'occupied').length;
+                            const isExpanded = expandedPropId === property.id;
+
+                            return (
+                                <Card key={property.id} className="transition-all hover:shadow-md">
+                                    <CardHeader className="cursor-pointer" onClick={() => setExpandedPropId(isExpanded ? null : property.id)}>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-4">
+                                                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                                                    <Building className="h-6 w-6 text-primary" />
+                                                </div>
+                                                <div>
+                                                    <CardTitle>{property.property_name}</CardTitle>
+                                                    <div className="text-sm text-muted-foreground mt-1">{property.address_line1}, {property.city}</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                                <Badge variant="outline" className={getOccupancyColor(rooms)}>{occupiedCount} / {rooms.length} Units</Badge>
+                                                {isExpanded ? <ChevronUp className="h-5 w-5"/> : <ChevronDown className="h-5 w-5"/>}
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    {isExpanded && (
+                                        <CardContent className="border-t bg-muted/20 pt-6">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                                {rooms.sort((a: any,b: any) => a.room_number.localeCompare(b.room_number)).map((room: any) => (
+                                                    <div key={room.id} className="bg-background border rounded-lg p-3 flex justify-between items-center">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center"><Bed className="h-4 w-4" /></div>
+                                                            <div><p className="font-semibold text-sm">Room {room.room_number}</p><p className="text-xs text-muted-foreground">£{room.base_rent}/mo</p></div>
+                                                        </div>
+                                                        <Badge variant={room.status === 'occupied' ? 'default' : 'secondary'}>{room.status}</Badge>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </CardContent>
+                                    )}
+                                </Card>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* === TAB: TENANTS === */}
+            {currentTab === "tenants" && (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold">Active Tenants</h2>
+                    <Card>
+                        <CardContent className="p-0">
+                            <div className="relative w-full overflow-auto">
+                                <table className="w-full caption-bottom text-sm text-left">
+                                    <thead className="border-b bg-muted/50">
+                                        <tr>
+                                            <th className="h-12 px-4 font-medium">Name</th>
+                                            <th className="h-12 px-4 font-medium">Property</th>
+                                            <th className="h-12 px-4 font-medium">Contact</th>
+                                            <th className="h-12 px-4 font-medium">Rent</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {tenancies.map((t) => {
+                                            const prop = properties.find(p => p.id === t.property_id);
+                                            const room = prop?.rooms?.find((r: any) => r.id === t.room_id);
+                                            const profile = lodgerNames[t.lodger_id] || {};
+                                            return (
+                                                <tr key={t.id} className="border-b hover:bg-muted/50">
+                                                    <td className="p-4 font-medium">{profile.full_name || 'Unknown'}</td>
+                                                    <td className="p-4">
+                                                        {prop?.property_name} <Badge variant="outline" className="ml-1 text-xs">Room {room?.room_number}</Badge>
+                                                    </td>
+                                                    <td className="p-4 text-sm text-muted-foreground">{profile.email}<br/>{profile.phone_number}</td>
+                                                    <td className="p-4">£{t.rent_amount}</td>
+                                                </tr>
+                                            )
+                                        })}
+                                        {tenancies.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">No active tenants found.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* === TAB: REPORTS === */}
+            {currentTab === "reports" && (
+              <div className="space-y-6">
+                <h2 className="text-2xl font-bold">Inspection History</h2>
+                <Card>
+                    <CardHeader><CardTitle className="flex gap-2"><ClipboardCheck className="h-5 w-5"/> Recent Inspections</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        {reports.length === 0 ? <p className="text-sm text-muted-foreground">No reports found.</p> :
+                        reports.map((r) => {
+                            const prop = properties.find(p => p.id === r.property_id);
+                            const room = prop?.rooms?.find((rm: any) => rm.id === r.room_id);
+                            return (
+                                <div key={r.id} className="p-3 border rounded-lg hover:bg-muted/50 cursor-pointer" onClick={() => { setSelectedReport(r); setIsReportOpen(true); }}>
+                                    <div className="flex justify-between">
+                                        <p className="font-medium">{prop?.property_name || "Property"}</p>
+                                        <Badge variant={r.inspection_status === 'passed' ? 'default' : 'destructive'} className="capitalize">
+                                            {r.inspection_status?.replace('_', ' ')}
+                                        </Badge>
+                                    </div>
+                                    <div className="flex justify-between items-end mt-1">
+                                        <div>
+                                            <p className="text-sm text-muted-foreground">{inspectorNames[r.inspector_id] || "Unknown Inspector"}</p>
+                                            {r.room_id ? <Badge variant="outline" className="text-[10px] mt-1">Room {room?.room_number}</Badge> : <Badge variant="outline" className="text-[10px] mt-1">Property Wide</Badge>}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">{format(parseISO(r.scheduled_date), 'PP')}</p>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                      </div>
+                    </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* === TAB: FINANCIALS === */}
+            {currentTab === "financials" && (
+              <div className="space-y-6">
+                <h2 className="text-2xl font-bold">Financial Overview</h2>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <Card>
+                    <CardHeader><CardTitle>Extra Charges</CardTitle><CardDescription>Summary across portfolio</CardDescription></CardHeader>
+                    <CardContent className="space-y-6">
+                      <div className="flex justify-between items-center p-4 bg-orange-50 rounded-lg border border-orange-100">
+                        <div><p className="text-sm font-medium text-orange-800">Outstanding</p></div>
+                        <p className="text-2xl font-bold text-orange-700">£{financials.outstanding.toFixed(2)}</p>
+                      </div>
+                      <div className="flex justify-between items-center p-4 bg-green-50 rounded-lg border border-green-100">
+                        <div><p className="text-sm font-medium text-green-800">Collected</p></div>
+                        <p className="text-2xl font-bold text-green-700">£{financials.collected.toFixed(2)}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            )}
+
+            {/* === TAB: SCHEDULES === */}
+            {currentTab === "schedules" && (
+              <div className="space-y-6">
+                <h2 className="text-2xl font-bold">Schedules</h2>
+                <Card>
+                  <CardContent className="p-0">
+                    <div className="relative w-full overflow-auto">
+                      <table className="w-full caption-bottom text-sm text-left">
+                        <thead className="border-b"><tr><th className="h-12 px-4">Property</th><th className="h-12 px-4">Type</th><th className="h-12 px-4">Date</th></tr></thead>
+                        <tbody>
+                          {schedules.map((s, i) => (
+                            <tr key={i} className="border-b hover:bg-muted/50">
+                              <td className="p-4">{s.properties?.property_name}</td>
+                              <td className="p-4 capitalize">{s.bin_type || "General"}</td>
+                              <td className="p-4">{format(parseISO(s.next_collection_date), 'EEE, d MMM')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+          </main>
         </div>
       </div>
 
-      {/* Property Detail Dialog */}
-      <Dialog open={isPropertyDetailOpen} onOpenChange={setIsPropertyDetailOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{selectedProperty?.name}</DialogTitle>
-            <DialogDescription>{selectedProperty?.address}</DialogDescription>
-          </DialogHeader>
-          
-          {selectedProperty && (
-            <div className="space-y-6">
-              {/* Property Image */}
-              <img
-                src={selectedProperty.image}
-                alt={selectedProperty.name}
-                className="w-full h-64 object-cover rounded-lg"
-              />
-
-              {/* Property Details */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Type</p>
-                  <p className="font-medium">{selectedProperty.type}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <Badge variant={selectedProperty.status === "Occupied" ? "default" : "secondary"}>
-                    {selectedProperty.status}
-                  </Badge>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Rent</p>
-                  <p className="font-medium text-lg">£{selectedProperty.rent}/mo</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Size</p>
-                  <p className="font-medium">{selectedProperty.sqft} sqft</p>
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* Bin Schedule */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Trash2 className="h-5 w-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Bin Schedule (View Only)</h3>
-                </div>
-                <Card>
-                  <CardContent className="pt-6 space-y-3">
-                    <div className="flex items-start gap-3">
-                      <Calendar className="h-5 w-5 text-muted-foreground mt-0.5" />
-                      <div>
-                        <p className="text-sm text-muted-foreground">Next Council Collection</p>
-                        <p className="font-medium">
-                          {new Date(selectedProperty.binSchedule.nextCollection).toLocaleDateString('en-GB', { 
-                            weekday: 'long', 
-                            year: 'numeric', 
-                            month: 'long', 
-                            day: 'numeric' 
-                          })}
-                        </p>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Collection Day: {selectedProperty.binSchedule.collectionDay}
-                        </p>
-                      </div>
-                    </div>
-                    <Separator />
-                    <div>
-                      <p className="text-sm text-muted-foreground mb-1">In-House Bin Rotation</p>
-                      <p className="text-sm">{selectedProperty.binSchedule.binRotation}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Separator />
-
-              {/* Inspection Schedule */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <ClipboardCheck className="h-5 w-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Inspection Schedule (View Only)</h3>
-                </div>
-                
-                {/* Next Inspection */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Next Inspection</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-5 w-5 text-muted-foreground" />
-                      <p className="font-medium">
-                        {new Date(selectedProperty.inspections.nextInspection).toLocaleDateString('en-GB', { 
-                          weekday: 'long', 
-                          year: 'numeric', 
-                          month: 'long', 
-                          day: 'numeric' 
-                        })}
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Inspection History */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Inspection History</CardTitle>
-                    <CardDescription>Past inspections for this property</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {selectedProperty.inspections.history.map((inspection: any, index: number) => (
-                      <div key={index} className="border rounded-lg p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="font-medium">
-                            {new Date(inspection.date).toLocaleDateString('en-GB', { 
-                              year: 'numeric', 
-                              month: 'long', 
-                              day: 'numeric' 
-                            })}
-                          </p>
-                          <Badge variant={inspection.status === "Passed" ? "default" : "secondary"}>
-                            {inspection.status}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground">Type: {inspection.type}</p>
-                        <p className="text-sm">{inspection.notes}</p>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </div>
-
-              {selectedProperty.tenant && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-sm text-muted-foreground">Current Tenant</p>
-                    <p className="font-medium">{selectedProperty.tenant}</p>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+      {/* Message Admin Dialog */}
+      <Dialog open={isMessageOpen} onOpenChange={setIsMessageOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Contact Admin</DialogTitle></DialogHeader>
+          <div className="py-4"><Label>Message</Label><Textarea value={messageBody} onChange={(e) => setMessageBody(e.target.value)} className="mt-2 h-32"/></div>
+          <DialogFooter><Button onClick={handleSendMessage}>Send</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <BottomNav role="landlord" />
+      {/* Report Viewer Dialog */}
+      <Dialog open={isReportOpen} onOpenChange={setIsReportOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Inspection Details</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                <span className="font-medium">Status</span>
+                <Badge variant={selectedReport?.inspection_status === 'passed' ? 'default' : 'destructive'} className="capitalize">{selectedReport?.inspection_status?.replace('_', ' ')}</Badge>
+            </div>
+            {selectedReport?.issues_found && selectedReport.issues_found.length > 0 && (
+                <div className="bg-red-50 p-3 rounded border border-red-100">
+                    <h4 className="font-semibold text-red-800 mb-2">Issues Found</h4>
+                    <ul className="list-disc list-inside text-sm text-red-700">{selectedReport.issues_found.map((issue: string, i: number) => <li key={i}>{issue}</li>)}</ul>
+                </div>
+            )}
+            <div>
+                <h4 className="font-medium mb-2">Notes</h4>
+                <p className="text-sm text-muted-foreground bg-slate-50 p-3 rounded border">{selectedReport?.overall_notes || "No notes."}</p>
+            </div>
+            {selectedReport?.photos && selectedReport.photos.length > 0 && (
+                <div>
+                    <h4 className="font-medium mb-2">Photos</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                        {selectedReport.photos.map((url: string, index: number) => (
+                            <div key={index} className="aspect-video bg-gray-100 rounded overflow-hidden border"><img src={url} className="w-full h-full object-cover" /></div>
+                        ))}
+                    </div>
+                </div>
+            )}
+          </div>
+          <DialogFooter><Button onClick={() => setIsReportOpen(false)}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };
 
-export default LandlordProperties;
+export default LandlordPortal;

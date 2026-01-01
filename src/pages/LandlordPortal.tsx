@@ -1,140 +1,324 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Home, Calendar, ClipboardCheck, DollarSign, Activity, MessageSquare, LogOut, Building, Wrench, Download, Eye, Check, X, AlertCircle, Camera, ImageIcon, UserCheck, Settings, ChevronRight, FileText } from "lucide-react";
+import { 
+  Home, Calendar, ClipboardCheck, DollarSign, MessageSquare, LogOut, 
+  Building, Users, Bed, ChevronDown, ChevronUp, AlertCircle, Loader2,
+  TrendingUp, Send, Paperclip, X, File, ChevronLeft, UserCircle
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/contexts/useAuth";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { cn } from "@/lib/utils";
-import { format, parseISO } from "date-fns";
+import { format, parseISO, formatDistanceToNow } from "date-fns";
+
+// === TYPES ===
+interface Message {
+  id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+  is_read: boolean;
+  attachments?: { name: string; type: string; url: string }[];
+}
+
+interface Thread {
+  id: string;
+  last_message_preview: string;
+  updated_at: string;
+  other_user?: { name: string; role: string; id: string };
+}
 
 const LandlordPortal = () => {
   const { logout, user } = useAuth();
   const [currentTab, setCurrentTab] = useState("overview");
   const [loading, setLoading] = useState(true);
 
-  // --- DATA STATE ---
+  // --- DASHBOARD DATA STATE ---
   const [properties, setProperties] = useState<any[]>([]);
+  const [tenancies, setTenancies] = useState<any[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
-  const [reports, setReports] = useState<{inspections: any[], cleanings: any[]}>({ inspections: [], cleanings: [] });
+  const [reports, setReports] = useState<any[]>([]);
   const [financials, setFinancials] = useState<{outstanding: number, collected: number}>({ outstanding: 0, collected: 0 });
-  const [serviceLogs, setServiceLogs] = useState<any[]>([]);
+  const [inspectorNames, setInspectorNames] = useState<Record<string, string>>({});
 
-  // --- DIALOG STATES ---
-  const [isMessageOpen, setIsMessageOpen] = useState(false);
-  const [messageBody, setMessageBody] = useState("");
+  // --- UI STATES ---
+  const [expandedPropId, setExpandedPropId] = useState<string | null>(null);
   const [selectedReport, setSelectedReport] = useState<any>(null);
-  const [isReportOpen, setIsReportOpen] = useState(false); // Reused for both cleaning & inspection viewing
+  const [isReportOpen, setIsReportOpen] = useState(false);
 
-  // --- 1. DATA FETCHING ---
+  // --- CHAT WIDGET STATE ---
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatView, setChatView] = useState<'list' | 'chat' | 'start'>('list');
+  const [chatLoading, setChatLoading] = useState(false);
+  
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [adminContact, setAdminContact] = useState<{id: string, name: string} | null>(null);
+  
+  const [newMessage, setNewMessage] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- 1. DATA FETCHING (DASHBOARD) ---
   const fetchData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      // A. Fetch Properties (The Core Link)
-      // Assuming RLS filters this to only the Landlord's properties
       const { data: props, error: propError } = await supabase.from('properties').select('*');
       if (propError) throw propError;
-      setProperties(props || []);
-
+      
       const propIds = props?.map(p => p.id) || [];
+      let activeTenancies: any[] = [];
+      let finalProperties = props || [];
 
       if (propIds.length > 0) {
-        // B. Fetch Schedules (Bin & Inspection Future Dates)
-        const { data: binData } = await supabase
-          .from('bin_schedules')
-          .select('*, properties(property_name)')
-          .in('property_id', propIds)
-          .gte('next_collection_date', new Date().toISOString())
-          .order('next_collection_date', { ascending: true });
-        
-        // C. Fetch Reports (Completed Inspections & Cleanings)
-        const { data: inspData } = await supabase
-          .from('inspection_reports')
-          .select('*, properties(property_name)')
-          .in('property_id', propIds)
-          .order('inspection_date', { ascending: false });
+        const { data: rooms } = await supabase.from('rooms').select('*').in('property_id', propIds);
+        const { data: tenData } = await supabase.from('tenancies').select('*').in('property_id', propIds).eq('tenancy_status', 'active');
+        const rawTenancies = tenData || [];
 
-        const { data: cleanData } = await supabase
-          .from('cleaning_logs')
-          .select('*, properties(property_name)')
-          .in('property_id', propIds)
-          .order('cleaned_at', { ascending: false });
+        activeTenancies = rawTenancies.map((t: any) => ({ ...t, final_rent: t.monthly_rent || 0 }));
+        setTenancies(activeTenancies);
 
-        // D. Fetch Financials (Aggregated Extra Charges - No Tenant Details)
-        const { data: chargeData } = await supabase
-          .from('extra_charges')
-          .select('amount, charge_status')
-          .in('property_id', propIds);
+        finalProperties = finalProperties.map(p => {
+            const pRooms = rooms?.filter(r => r.property_id === p.id) || [];
+            const pTenants = activeTenancies.filter((t: any) => t.property_id === p.id);
+            const updatedRooms = pRooms.map(r => {
+                const tenancy = pTenants.find((t: any) => t.room_id === r.id);
+                return { 
+                    ...r, status: tenancy ? 'occupied' : 'available', display_rent: tenancy ? tenancy.monthly_rent : r.base_rent
+                };
+            });
+            const totalIncome = pTenants.reduce((sum, t) => sum + (Number(t.monthly_rent) || 0), 0);
+            return { ...p, rooms: updatedRooms, active_tenants: pTenants, total_income: totalIncome };
+        });
 
-        // E. Service User Activity
-        const { data: logData } = await supabase
-          .from('service_user_logs') // Assuming table name
-          .select('*, properties(property_name)')
-          .in('property_id', propIds)
-          .order('created_at', { ascending: false })
-          .limit(20);
-
+        const { data: binData } = await supabase.from('bin_schedules').select('*, properties(property_name)').in('property_id', propIds).gte('next_collection_date', new Date().toISOString()).order('next_collection_date', { ascending: true });
         setSchedules(binData || []);
-        setReports({ inspections: inspData || [], cleanings: cleanData || [] });
-        setServiceLogs(logData || []);
 
-        // Calculate Financial Aggregates
+        const { data: inspData } = await supabase.from('inspections').select('*').in('property_id', propIds).neq('inspection_status', 'scheduled').order('scheduled_date', { ascending: false });
+        const rawReports = inspData || [];
+        setReports(rawReports);
+        
+        // Resolve Inspectors (Simplified for brevity, same logic as before)
+        const staffIds = rawReports.filter((r: any) => r.inspector_type === 'staff').map((r: any) => r.inspector_id);
+        if (staffIds.length > 0) {
+            const { data: s } = await supabase.from('staff_profiles').select('id, full_name').in('id', staffIds);
+            const iMap: any = {};
+            s?.forEach((x: any) => iMap[x.id] = x.full_name);
+            setInspectorNames(iMap);
+        }
+
+        const { data: chargeData } = await supabase.from('extra_charges').select('amount, charge_status').in('property_id', propIds);
         const outstanding = chargeData?.filter(c => ['pending', 'overdue'].includes(c.charge_status)).reduce((acc, curr) => acc + (curr.amount || 0), 0) || 0;
         const collected = chargeData?.filter(c => c.charge_status === 'paid').reduce((acc, curr) => acc + (curr.amount || 0), 0) || 0;
         setFinancials({ outstanding, collected });
       }
-
+      setProperties(finalProperties);
     } catch (error) {
-      console.error("Error loading landlord data:", error);
-      toast({ title: "Error", description: "Could not load property data.", variant: "destructive" });
+      console.error("Error loading dashboard:", error);
     } finally {
       setLoading(false);
     }
   }, [user]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  // --- HANDLERS ---
+  // --- 2. CHAT WIDGET LOGIC ---
+
+  // A. Load Thread List
+  const loadThreadList = async () => {
+    if (!user) return;
+    setChatLoading(true);
+    try {
+        // 1. Get Threads
+        const { data: threadData } = await supabase
+            .from('message_threads')
+            .select('*')
+            .contains('participants', [user.id])
+            .order('updated_at', { ascending: false });
+
+        if (threadData && threadData.length > 0) {
+            // 2. Process Threads (Find other user name)
+            const processed = await Promise.all(threadData.map(async (t) => {
+                const otherId = t.participants.find((id: string) => id !== user.id);
+                // Try fetching Admin name
+                let name = "Support";
+                let role = "Admin";
+                if (otherId) {
+                    const { data: admin } = await supabase.from('admin_profiles').select('full_name').eq('user_id', otherId).single();
+                    if (admin) name = admin.full_name;
+                    else {
+                        const { data: staff } = await supabase.from('staff_profiles').select('full_name').eq('user_id', otherId).single();
+                        if (staff) { name = staff.full_name; role = "Staff"; }
+                    }
+                }
+                return { ...t, other_user: { name, role, id: otherId } };
+            }));
+            
+            setThreads(processed);
+            setChatView('list');
+        } else {
+            // 3. No threads -> Go to Start Screen
+            await prepareStartScreen();
+        }
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setChatLoading(false);
+    }
+  };
+
+  // B. Prepare Start Screen (Fetch Admin)
+  const prepareStartScreen = async () => {
+    try {
+        const { data: admins } = await supabase.from('admin_profiles').select('user_id, full_name').limit(1);
+        if (admins && admins.length > 0) {
+            setAdminContact({ id: admins[0].user_id, name: admins[0].full_name });
+            setChatView('start');
+        } else {
+            // Fallback to Staff if no admin table
+            const { data: staff } = await supabase.from('staff_profiles').select('user_id, full_name').limit(1);
+            if (staff && staff.length > 0) {
+                setAdminContact({ id: staff[0].user_id, name: staff[0].full_name });
+                setChatView('start');
+            }
+        }
+    } catch (e) { console.error(e); }
+  };
+
+  // C. Start New Chat
+  const handleStartChat = async () => {
+    if (!user || !adminContact) return;
+    setChatLoading(true);
+    try {
+        const { data, error } = await supabase.from('message_threads').insert({
+            participants: [user.id, adminContact.id],
+            last_message_preview: "Chat started",
+            updated_at: new Date().toISOString()
+        }).select().single();
+
+        if (error) throw error;
+        if (data) openThread(data.id);
+    } catch (e: any) {
+        toast.error("Error starting chat");
+        setChatLoading(false);
+    }
+  };
+
+  // D. Open a Thread (Enter Chat View)
+  const openThread = async (threadId: string) => {
+    setActiveThreadId(threadId);
+    setChatView('chat');
+    setChatLoading(true);
+    
+    // Load Messages
+    const { data: msgs } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('thread_id', threadId)
+        .order('created_at', { ascending: true });
+    
+    setMessages(msgs || []);
+    setChatLoading(false);
+    scrollToBottom();
+
+    // Subscribe
+    const channel = supabase.channel(`chat:${threadId}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `thread_id=eq.${threadId}` }, (payload) => {
+            setMessages(prev => [...prev, payload.new as Message]);
+            scrollToBottom();
+        })
+        .subscribe();
+        
+    return () => supabase.removeChannel(channel);
+  };
+
+  // Initialize Widget
+  useEffect(() => {
+    if (isChatOpen) loadThreadList();
+  }, [isChatOpen]);
+
+
+  // --- CHAT ACTIONS ---
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) setSelectedFile(e.target.files[0]);
+  };
+
+  const clearAttachment = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   const handleSendMessage = async () => {
-    if (!messageBody) return;
-    try {
-      // Feature 4: Message Admin Only
-      await supabase.from('notifications').insert({
-        recipient_id: 'admin_uuid_placeholder', // You would typically fetch the admin ID or have a dedicated 'admin_messages' table
-        subject: `Landlord Message from ${user?.name}`,
-        message_body: messageBody,
-        notification_type: 'support',
-        is_read: false
-      });
-      toast({ title: "Sent", description: "Message sent to Administration." });
-      setIsMessageOpen(false);
-      setMessageBody("");
-    } catch (e) {
-      toast({ title: "Error", description: "Failed to send message.", variant: "destructive" });
+    if ((!newMessage.trim() && !selectedFile) || !activeThreadId || !user) return;
+    setUploading(true);
+
+    let attachments = [];
+    if (selectedFile) {
+        const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
+        const filePath = `${activeThreadId}/${Date.now()}_${sanitizedName}`;
+        try {
+            await supabase.storage.from('chat-attachments').upload(filePath, selectedFile);
+            const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
+            attachments.push({ name: selectedFile.name, type: selectedFile.type, url: data.publicUrl });
+        } catch (e) { toast.error("Upload failed"); setUploading(false); return; }
     }
+
+    await supabase.from('messages').insert({
+        thread_id: activeThreadId,
+        sender_id: user.id,
+        content: newMessage,
+        attachments: attachments.length > 0 ? attachments : null
+    });
+    
+    // Update thread preview
+    await supabase.from('message_threads').update({ 
+        last_message_preview: newMessage || "Attachment sent",
+        updated_at: new Date().toISOString()
+    }).eq('id', activeThreadId);
+
+    setNewMessage("");
+    clearAttachment();
+    setUploading(false);
+    scrollToBottom();
+  };
+
+  const scrollToBottom = () => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); };
+
+  // --- HELPERS (UI) ---
+  const getOccupancyColor = (rooms: any[]) => {
+    if (!rooms) return "bg-gray-100";
+    const total = rooms.length;
+    const occupied = rooms.filter(r => r.status === 'occupied').length;
+    if (total === 0) return "bg-gray-100 text-gray-600";
+    if (occupied === total) return "bg-green-100 text-green-700";
+    if (occupied === 0) return "bg-red-100 text-red-700";
+    return "bg-yellow-100 text-yellow-700";
   };
 
   const navItems = [
     { id: "overview", label: "Dashboard", icon: Home },
+    { id: "properties", label: "Properties", icon: Building },
+    { id: "tenants", label: "Tenants", icon: Users },
     { id: "schedules", label: "Schedules", icon: Calendar },
     { id: "reports", label: "Service Reports", icon: ClipboardCheck },
     { id: "financials", label: "Financials", icon: DollarSign },
-    { id: "activity", label: "Activity Log", icon: Activity },
   ];
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading Portal...</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary" /></div>;
 
   return (
     <>
@@ -162,111 +346,146 @@ const LandlordPortal = () => {
         </aside>
 
         {/* Main Content */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col relative">
           <header className="h-16 border-b bg-card px-8 flex items-center justify-between sticky top-0 z-10">
             <div>
               <h1 className="text-xl font-semibold capitalize">{navItems.find(n => n.id === currentTab)?.label}</h1>
               <p className="text-sm text-muted-foreground">Portfolio Overview</p>
             </div>
             <div className="flex items-center gap-4">
-              <Button variant="outline" onClick={() => setIsMessageOpen(true)}>
+              <Button variant="outline" onClick={() => setIsChatOpen(true)}>
                 <MessageSquare className="h-4 w-4 mr-2" /> Message Admin
               </Button>
             </div>
           </header>
 
-          <main className="flex-1 p-8 overflow-auto bg-muted/30">
-            
-            {/* === TAB 1: OVERVIEW === */}
+          <main className="flex-1 p-8 overflow-auto bg-muted/30 pb-24">
+            {/* === TAB: OVERVIEW === */}
             {currentTab === "overview" && (
               <div className="space-y-6">
-                {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <Card>
-                    <CardContent className="p-6 flex items-center gap-4">
-                      <div className="h-12 w-12 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600"><Building className="h-6 w-6"/></div>
-                      <div><p className="text-sm text-muted-foreground">Properties</p><p className="text-2xl font-bold">{properties.length}</p></div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="p-6 flex items-center gap-4">
-                      <div className="h-12 w-12 rounded-lg bg-green-100 flex items-center justify-center text-green-600"><ClipboardCheck className="h-6 w-6"/></div>
-                      <div><p className="text-sm text-muted-foreground">Reports This Month</p><p className="text-2xl font-bold">{reports.inspections.length + reports.cleanings.length}</p></div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="p-6 flex items-center gap-4">
-                      <div className="h-12 w-12 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600"><AlertCircle className="h-6 w-6"/></div>
-                      <div><p className="text-sm text-muted-foreground">Outstanding Charges</p><p className="text-2xl font-bold text-orange-600">£{financials.outstanding}</p></div>
-                    </CardContent>
-                  </Card>
+                  <Card><CardContent className="p-6 flex items-center gap-4"><div className="h-12 w-12 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600"><Building className="h-6 w-6"/></div><div><p className="text-sm text-muted-foreground">Properties</p><p className="text-2xl font-bold">{properties.length}</p></div></CardContent></Card>
+                  <Card><CardContent className="p-6 flex items-center gap-4"><div className="h-12 w-12 rounded-lg bg-green-100 flex items-center justify-center text-green-600"><Users className="h-6 w-6"/></div><div><p className="text-sm text-muted-foreground">Active Tenants</p><p className="text-2xl font-bold">{tenancies.length}</p></div></CardContent></Card>
+                  <Card><CardContent className="p-6 flex items-center gap-4"><div className="h-12 w-12 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600"><AlertCircle className="h-6 w-6"/></div><div><p className="text-sm text-muted-foreground">Outstanding</p><p className="text-2xl font-bold text-orange-600">£{financials.outstanding}</p></div></CardContent></Card>
                 </div>
-
-                <div className="grid md:grid-cols-2 gap-6">
-                  {/* Feature 1: Upcoming Schedules Snippet */}
-                  <Card>
-                    <CardHeader><CardTitle className="text-lg">Upcoming Schedules</CardTitle></CardHeader>
+                {/* Reports Snippet */}
+                <Card>
+                    <CardHeader><CardTitle>Recent Activity</CardTitle></CardHeader>
                     <CardContent>
-                      <div className="space-y-4">
-                        {schedules.slice(0, 3).map((s, i) => (
-                          <div key={i} className="flex items-center justify-between border-b pb-2 last:border-0">
-                            <div>
-                              <p className="font-medium">{s.properties?.property_name}</p>
-                              <p className="text-sm text-muted-foreground">{s.bin_type} Collection</p>
-                            </div>
-                            <Badge variant="outline">{format(parseISO(s.next_collection_date), 'MMM d')}</Badge>
-                          </div>
-                        ))}
-                        {schedules.length === 0 && <p className="text-sm text-muted-foreground">No upcoming schedules.</p>}
-                      </div>
+                        <div className="space-y-4">
+                            {reports.length === 0 ? <p className="text-sm text-muted-foreground">No recent activity.</p> : 
+                            reports.slice(0, 3).map(r => {
+                                const prop = properties.find(p => p.id === r.property_id);
+                                return (
+                                    <div key={r.id} className="flex justify-between items-center border-b pb-2 last:border-0">
+                                        <div>
+                                            <p className="font-medium">{prop?.property_name || 'Property'}</p>
+                                            <p className="text-xs text-muted-foreground capitalize">{r.inspection_type?.replace('_', ' ')}</p>
+                                        </div>
+                                        <Badge variant={r.inspection_status === 'passed' ? 'default' : 'destructive'} className="capitalize">{r.inspection_status?.replace('_', ' ')}</Badge>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </CardContent>
-                  </Card>
-
-                  {/* Feature 5: Recent Activity Snippet */}
-                  <Card>
-                    <CardHeader><CardTitle className="text-lg">Recent Service Activity</CardTitle></CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        {serviceLogs.slice(0, 3).map((log, i) => (
-                          <div key={i} className="flex gap-3">
-                            <div className="mt-1"><Activity className="h-4 w-4 text-blue-500"/></div>
-                            <div>
-                              <p className="text-sm font-medium">{log.task_name} <span className="text-muted-foreground">at {log.properties?.property_name}</span></p>
-                              <p className="text-xs text-muted-foreground">{format(parseISO(log.created_at), 'PP p')}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
+                </Card>
               </div>
             )}
 
-            {/* === TAB 2: SCHEDULES (Feature 1) === */}
+            {/* === TAB: PROPERTIES === */}
+            {currentTab === "properties" && (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold">My Properties</h2>
+                    <div className="grid gap-6">
+                        {properties.map((property) => {
+                            const rooms = property.rooms || [];
+                            const occupiedCount = rooms.filter((r: any) => r.status === 'occupied').length;
+                            const isExpanded = expandedPropId === property.id;
+                            return (
+                                <Card key={property.id} className="transition-all hover:shadow-md">
+                                    <CardHeader className="cursor-pointer" onClick={() => setExpandedPropId(isExpanded ? null : property.id)}>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-4">
+                                                <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center"><Building className="h-6 w-6 text-primary" /></div>
+                                                <div><CardTitle>{property.property_name}</CardTitle><div className="text-sm text-muted-foreground mt-1">{property.address_line1}, {property.city}</div></div>
+                                            </div>
+                                            <div className="flex items-center gap-6">
+                                                <div className="text-right hidden md:block"><div className="flex items-center gap-1 text-green-700 font-medium"><TrendingUp className="h-4 w-4" /> <span>£{property.total_income}/mo</span></div><p className="text-xs text-muted-foreground text-right">Income</p></div>
+                                                <div className="text-right"><Badge variant="outline" className={getOccupancyColor(rooms)}>{occupiedCount} / {rooms.length} Units</Badge></div>
+                                                {isExpanded ? <ChevronUp className="h-5 w-5"/> : <ChevronDown className="h-5 w-5"/>}
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    {isExpanded && (
+                                        <CardContent className="border-t bg-muted/20 pt-6">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                                {rooms.sort((a: any,b: any) => a.room_number.localeCompare(b.room_number)).map((room: any) => (
+                                                    <div key={room.id} className="bg-background border rounded-lg p-3 flex justify-between items-center">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center"><Bed className="h-4 w-4" /></div>
+                                                            <div><p className="font-semibold text-sm">Room {room.room_number}</p><p className="text-xs text-muted-foreground">£{room.display_rent}/mo</p></div>
+                                                        </div>
+                                                        <Badge variant={room.status === 'occupied' ? 'default' : 'secondary'}>{room.status}</Badge>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </CardContent>
+                                    )}
+                                </Card>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* === TAB: TENANTS === */}
+            {currentTab === "tenants" && (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold">Active Tenants</h2>
+                    <Card>
+                        <CardContent className="p-0">
+                            <div className="relative w-full overflow-auto">
+                                <table className="w-full caption-bottom text-sm text-left">
+                                    <thead className="border-b bg-muted/50">
+                                        <tr><th className="h-12 px-4">Property / Room</th><th className="h-12 px-4">Start Date</th><th className="h-12 px-4">End Date</th><th className="h-12 px-4">Monthly Rent</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {tenancies.map((t) => {
+                                            const prop = properties.find(p => p.id === t.property_id);
+                                            const room = prop?.rooms?.find((r: any) => r.id === t.room_id);
+                                            return (
+                                                <tr key={t.id} className="border-b hover:bg-muted/50">
+                                                    <td className="p-4">{prop?.property_name || 'Unknown'} {room && <Badge variant="outline" className="ml-2 text-xs">Room {room.room_number}</Badge>}</td>
+                                                    <td className="p-4 text-sm">{format(parseISO(t.start_date), 'dd MMM yyyy')}</td>
+                                                    <td className="p-4 text-sm">{t.end_date ? format(parseISO(t.end_date), 'dd MMM yyyy') : 'Ongoing'}</td>
+                                                    <td className="p-4 font-medium">£{t.final_rent}</td>
+                                                </tr>
+                                            )
+                                        })}
+                                        {tenancies.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-muted-foreground">No active tenants.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* === TAB: SCHEDULES === */}
             {currentTab === "schedules" && (
               <div className="space-y-6">
-                <h2 className="text-2xl font-bold">Bin & Inspection Schedules</h2>
+                <h2 className="text-2xl font-bold">Schedules</h2>
                 <Card>
-                  <CardHeader><CardTitle>Upcoming Dates</CardTitle></CardHeader>
-                  <CardContent>
+                  <CardContent className="p-0">
                     <div className="relative w-full overflow-auto">
                       <table className="w-full caption-bottom text-sm text-left">
-                        <thead className="border-b">
-                          <tr>
-                            <th className="h-12 px-4 font-medium">Property</th>
-                            <th className="h-12 px-4 font-medium">Type</th>
-                            <th className="h-12 px-4 font-medium">Date</th>
-                            <th className="h-12 px-4 font-medium">Status</th>
-                          </tr>
-                        </thead>
+                        <thead className="border-b"><tr><th className="h-12 px-4">Property</th><th className="h-12 px-4">Type</th><th className="h-12 px-4">Date</th></tr></thead>
                         <tbody>
                           {schedules.map((s, i) => (
                             <tr key={i} className="border-b hover:bg-muted/50">
                               <td className="p-4">{s.properties?.property_name}</td>
                               <td className="p-4 capitalize">{s.bin_type || "General"}</td>
-                              <td className="p-4">{format(parseISO(s.next_collection_date), 'EEEE, d MMMM yyyy')}</td>
-                              <td className="p-4"><Badge variant="secondary">Scheduled</Badge></td>
+                              <td className="p-4">{format(parseISO(s.next_collection_date), 'EEE, d MMM')}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -277,45 +496,31 @@ const LandlordPortal = () => {
               </div>
             )}
 
-            {/* === TAB 3: REPORTS (Feature 2) === */}
+            {/* === TAB: REPORTS === */}
             {currentTab === "reports" && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Service Reports</h2>
                 <div className="grid md:grid-cols-2 gap-6">
-                  {/* Inspection Reports */}
                   <Card>
                     <CardHeader><CardTitle className="flex gap-2"><ClipboardCheck className="h-5 w-5"/> Inspections</CardTitle></CardHeader>
                     <CardContent>
                       <div className="space-y-3">
-                        {reports.inspections.map((r) => (
-                          <div key={r.id} className="p-3 border rounded-lg hover:bg-muted/50 cursor-pointer" onClick={() => { setSelectedReport(r); setIsReportOpen(true); }}>
-                            <div className="flex justify-between">
-                              <p className="font-medium">{r.properties?.property_name}</p>
-                              <Badge variant={r.status === 'Passed' ? 'default' : 'destructive'}>{r.status}</Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground mt-1">Inspector: {r.inspector_name}</p>
-                            <p className="text-xs text-muted-foreground">{format(parseISO(r.inspection_date), 'PP')}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* Cleaning Logs */}
-                  <Card>
-                    <CardHeader><CardTitle className="flex gap-2"><Wrench className="h-5 w-5"/> Cleaning Logs</CardTitle></CardHeader>
-                    <CardContent>
-                      <div className="space-y-3">
-                        {reports.cleanings.map((c) => (
-                          <div key={c.id} className="p-3 border rounded-lg hover:bg-muted/50 cursor-pointer" onClick={() => { setSelectedReport(c); setIsReportOpen(true); }}>
-                            <div className="flex justify-between">
-                              <p className="font-medium">{c.properties?.property_name}</p>
-                              <Badge variant="outline">Cleaning</Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground mt-1">{c.notes ? "Notes available" : "Routine Clean"}</p>
-                            <p className="text-xs text-muted-foreground">{format(parseISO(c.cleaned_at), 'PP')}</p>
-                          </div>
-                        ))}
+                        {reports.length === 0 ? <p className="text-sm text-muted-foreground">No inspections found.</p> :
+                        reports.map((r) => {
+                            const prop = properties.find(p => p.id === r.property_id);
+                            return (
+                                <div key={r.id} className="p-3 border rounded-lg hover:bg-muted/50 cursor-pointer" onClick={() => { setSelectedReport(r); setIsReportOpen(true); }}>
+                                    <div className="flex justify-between">
+                                        <p className="font-medium">{prop?.property_name || "Property"}</p>
+                                        <Badge variant={r.inspection_status === 'passed' ? 'default' : 'destructive'} className="capitalize">{r.inspection_status?.replace('_', ' ')}</Badge>
+                                    </div>
+                                    <div className="flex justify-between items-end mt-1">
+                                        <p className="text-sm text-muted-foreground capitalize">{r.inspection_type?.replace('_', ' ')}</p>
+                                        <p className="text-xs text-muted-foreground">{format(parseISO(r.scheduled_date), 'PP')}</p>
+                                    </div>
+                                </div>
+                            )
+                        })}
                       </div>
                     </CardContent>
                   </Card>
@@ -323,154 +528,152 @@ const LandlordPortal = () => {
               </div>
             )}
 
-            {/* === TAB 4: FINANCIALS (Feature 3 - Aggregated) === */}
+            {/* === TAB: FINANCIALS === */}
             {currentTab === "financials" && (
               <div className="space-y-6">
                 <h2 className="text-2xl font-bold">Financial Overview</h2>
                 <div className="grid md:grid-cols-2 gap-6">
-                  <Card>
-                    <CardHeader><CardTitle>Extra Charges Summary</CardTitle><CardDescription>Aggregated view across all properties</CardDescription></CardHeader>
+                  <Card><CardHeader><CardTitle>Extra Charges</CardTitle><CardDescription>Summary across portfolio</CardDescription></CardHeader>
                     <CardContent className="space-y-6">
-                      <div className="flex justify-between items-center p-4 bg-orange-50 rounded-lg border border-orange-100">
-                        <div>
-                          <p className="text-sm font-medium text-orange-800">Total Outstanding</p>
-                          <p className="text-xs text-orange-600">Pending & Overdue Charges</p>
-                        </div>
-                        <p className="text-2xl font-bold text-orange-700">£{financials.outstanding.toFixed(2)}</p>
-                      </div>
-                      <div className="flex justify-between items-center p-4 bg-green-50 rounded-lg border border-green-100">
-                        <div>
-                          <p className="text-sm font-medium text-green-800">Total Collected</p>
-                          <p className="text-xs text-green-600">Paid Extra Charges</p>
-                        </div>
-                        <p className="text-2xl font-bold text-green-700">£{financials.collected.toFixed(2)}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader><CardTitle>Note</CardTitle></CardHeader>
-                    <CardContent>
-                      <p className="text-sm text-muted-foreground">
-                        This summary represents extra charges (damage, cleaning, etc.) levied across your portfolio. 
-                        Tenant names are anonymized for this high-level view. For detailed breakdowns, please contact administration.
-                      </p>
+                      <div className="flex justify-between items-center p-4 bg-orange-50 rounded-lg border border-orange-100"><div><p className="text-sm font-medium text-orange-800">Outstanding</p></div><p className="text-2xl font-bold text-orange-700">£{financials.outstanding.toFixed(2)}</p></div>
+                      <div className="flex justify-between items-center p-4 bg-green-50 rounded-lg border border-green-100"><div><p className="text-sm font-medium text-green-800">Collected</p></div><p className="text-2xl font-bold text-green-700">£{financials.collected.toFixed(2)}</p></div>
                     </CardContent>
                   </Card>
                 </div>
               </div>
             )}
-
-            {/* === TAB 5: ACTIVITY (Feature 5) === */}
-            {currentTab === "activity" && (
-              <div className="space-y-6">
-                <h2 className="text-2xl font-bold">Service User Activity</h2>
-                <Card>
-                  <CardHeader><CardTitle>Task Log</CardTitle></CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {serviceLogs.map((log) => (
-                        <div key={log.id} className="flex items-start gap-4 p-4 border rounded-lg">
-                          <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                            <Activity className="h-5 w-5 text-blue-600" />
-                          </div>
-                          <div>
-                            <p className="font-semibold">{log.task_name}</p>
-                            <p className="text-sm text-gray-600">Property: {log.properties?.property_name}</p>
-                            <div className="flex gap-2 mt-2">
-                              <Badge variant="outline">{log.status || 'Completed'}</Badge>
-                              <span className="text-xs text-muted-foreground flex items-center">{format(parseISO(log.created_at), 'PP p')}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )}
-
           </main>
         </div>
       </div>
 
-      {/* Message Admin Dialog */}
-      <Dialog open={isMessageOpen} onOpenChange={setIsMessageOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Contact Administration</DialogTitle>
-            <DialogDescription>Send a secure message to the property management team.</DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Label>Message</Label>
-            <Textarea 
-              value={messageBody} 
-              onChange={(e) => setMessageBody(e.target.value)} 
-              placeholder="Type your message here..." 
-              className="mt-2 h-32"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsMessageOpen(false)}>Cancel</Button>
-            <Button onClick={handleSendMessage}>Send Message</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* === SMART CHAT WIDGET (Multi-View) === */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2">
+        {isChatOpen && (
+            <Card className="w-[360px] h-[520px] shadow-2xl flex flex-col animate-in slide-in-from-bottom-5 duration-300 border-primary/20">
+                <CardHeader className="bg-primary text-primary-foreground py-3 rounded-t-xl flex flex-row items-center justify-between shrink-0">
+                    <div className="flex items-center gap-2">
+                        {chatView === 'chat' && <Button variant="ghost" size="icon" className="h-6 w-6 text-white hover:bg-white/20" onClick={() => setChatView('list')}><ChevronLeft className="h-4 w-4"/></Button>}
+                        <div>
+                            <CardTitle className="text-base">{chatView === 'chat' ? 'Chat' : 'Messages'}</CardTitle>
+                            <CardDescription className="text-primary-foreground/80 text-xs">{chatView === 'chat' ? 'Direct line to admin' : 'Your conversations'}</CardDescription>
+                        </div>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary-foreground hover:bg-white/20" onClick={() => setIsChatOpen(false)}><X className="h-4 w-4" /></Button>
+                </CardHeader>
+                
+                <CardContent className="flex-1 p-0 flex flex-col overflow-hidden bg-background">
+                    {chatLoading ? <div className="flex-1 flex items-center justify-center"><Loader2 className="animate-spin text-primary" /></div> : (
+                        <>
+                            {/* --- VIEW 1: THREAD LIST --- */}
+                            {chatView === 'list' && (
+                                <ScrollArea className="flex-1 p-2">
+                                    <div className="space-y-1">
+                                        {threads.map(t => (
+                                            <div key={t.id} onClick={() => openThread(t.id)} className="p-3 hover:bg-muted rounded-lg cursor-pointer flex justify-between items-start border-b last:border-0">
+                                                <div>
+                                                    <p className="font-medium text-sm">{t.other_user?.name || "Support"}</p>
+                                                    <p className="text-xs text-muted-foreground truncate max-w-[200px]">{t.last_message_preview}</p>
+                                                </div>
+                                                <span className="text-[10px] text-muted-foreground">{formatDistanceToNow(parseISO(t.updated_at), { addSuffix: false })}</span>
+                                            </div>
+                                        ))}
+                                        {threads.length === 0 && (
+                                            <div className="text-center py-10">
+                                                <p className="text-muted-foreground text-sm mb-4">No conversations yet.</p>
+                                                <Button onClick={prepareStartScreen} variant="outline" size="sm">Refresh</Button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </ScrollArea>
+                            )}
+
+                            {/* --- VIEW 2: START SCREEN --- */}
+                            {chatView === 'start' && (
+                                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                                    <div className="h-16 w-16 bg-primary/10 rounded-full flex items-center justify-center mb-4"><UserCircle className="h-8 w-8 text-primary" /></div>
+                                    <h3 className="font-semibold text-lg mb-1">Contact Support</h3>
+                                    {adminContact ? (
+                                        <>
+                                            <p className="text-sm text-muted-foreground mb-6">Chat with <strong>{adminContact.name}</strong></p>
+                                            <Button onClick={handleStartChat} className="w-full"><MessageSquare className="w-4 h-4 mr-2" /> Start Chat</Button>
+                                        </>
+                                    ) : <p className="text-sm text-destructive">No Admin contacts found.</p>}
+                                </div>
+                            )}
+
+                            {/* --- VIEW 3: ACTIVE CHAT --- */}
+                            {chatView === 'chat' && (
+                                <>
+                                    <ScrollArea className="flex-1 p-4">
+                                        <div className="space-y-4">
+                                            {messages.map(msg => {
+                                                const isMe = msg.sender_id === user?.id;
+                                                return (
+                                                    <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                                        <div className={cn("max-w-[80%] rounded-lg p-2 text-sm", isMe ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-muted rounded-tl-none")}>
+                                                            {msg.attachments && msg.attachments.length > 0 && (
+                                                                <div className="mb-2 space-y-2">
+                                                                    {msg.attachments.map((att: any, idx: number) => (
+                                                                        <div key={idx}>
+                                                                            {att.type.startsWith('image') ? <img src={att.url} className="rounded-md max-h-32 object-cover border" /> : <a href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-black/10 p-2 rounded hover:bg-black/20 text-xs text-white/90 underline"><File className="h-4 w-4" /> {att.name}</a>}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {msg.content}
+                                                            <p className={cn("text-[10px] mt-1 text-right", isMe ? "text-primary-foreground/70" : "text-muted-foreground")}>{format(parseISO(msg.created_at), 'HH:mm')}</p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                            <div ref={messagesEndRef} />
+                                        </div>
+                                    </ScrollArea>
+                                    <div className="p-3 border-t bg-background">
+                                        {selectedFile && (
+                                            <div className="flex items-center gap-3 mb-2 p-2 bg-muted/30 rounded border w-fit">
+                                                {selectedFile.type.startsWith('image') ? <img src={URL.createObjectURL(selectedFile)} className="h-8 w-8 object-cover rounded" /> : <div className="h-8 w-8 bg-gray-200 rounded flex items-center justify-center"><File className="h-4 w-4 text-gray-500" /></div>}
+                                                <div className="text-xs"><p className="font-medium max-w-[100px] truncate">{selectedFile.name}</p></div>
+                                                <Button variant="ghost" size="icon" className="h-5 w-5" onClick={clearAttachment}><X className="h-3 w-3" /></Button>
+                                            </div>
+                                        )}
+                                        <div className="flex gap-2 items-center">
+                                            <div className="flex gap-1">
+                                                <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
+                                                <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => fileInputRef.current?.click()}><Paperclip className="h-4 w-4 text-muted-foreground" /></Button>
+                                            </div>
+                                            <Input placeholder="Type message..." className="h-9 text-sm" value={newMessage} onChange={e => setNewMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} />
+                                            <Button size="icon" className="h-9 w-9 shrink-0" onClick={handleSendMessage} disabled={uploading}>{uploading ? <Loader2 className="h-4 w-4 animate-spin"/> : <Send className="h-4 w-4" />}</Button>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </>
+                    )}
+                </CardContent>
+            </Card>
+        )}
+        {!isChatOpen && (
+            <Button size="icon" className="h-14 w-14 rounded-full shadow-lg hover:scale-105 transition-transform" onClick={() => setIsChatOpen(true)}>
+                <MessageSquare className="h-6 w-6" />
+            </Button>
+        )}
+      </div>
 
       {/* Report Viewer Dialog */}
       <Dialog open={isReportOpen} onOpenChange={setIsReportOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Report Details</DialogTitle>
-            <DialogDescription>
-              {selectedReport?.properties?.property_name} - {selectedReport?.inspection_date ? "Inspection" : "Cleaning"}
-            </DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Inspection Details</DialogTitle></DialogHeader>
           <div className="space-y-4">
-            {/* Conditional Rendering based on Report Type */}
-            {selectedReport?.inspection_date ? (
-              <>
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="font-medium">Status</span>
-                  <Badge variant={selectedReport.status === 'Passed' ? 'default' : 'destructive'}>{selectedReport.status}</Badge>
-                </div>
-                <div>
-                  <h4 className="font-medium mb-2">Inspector Notes</h4>
-                  <p className="text-sm text-muted-foreground bg-slate-50 p-3 rounded border">{selectedReport.overall_notes || "No notes provided."}</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <span className="font-medium">Type</span>
-                  <Badge>Cleaning</Badge>
-                </div>
-                <div>
-                  <h4 className="font-medium mb-2">Cleaner Notes</h4>
-                  <p className="text-sm text-muted-foreground bg-slate-50 p-3 rounded border">{selectedReport?.notes || "Routine clean completed."}</p>
-                </div>
-              </>
-            )}
-
-            {/* Photos Section (Generic for both) */}
-            {selectedReport?.photos && Array.isArray(selectedReport.photos) && selectedReport.photos.length > 0 && (
-              <div>
-                <h4 className="font-medium mb-2">Attached Photos</h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {selectedReport.photos.map((url: string, index: number) => (
-                    <div key={index} className="aspect-video bg-gray-100 rounded overflow-hidden border">
-                      <img src={url} alt="Report attachment" className="w-full h-full object-cover" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                <span className="font-medium">Status</span>
+                <Badge variant={selectedReport?.inspection_status === 'passed' ? 'default' : 'destructive'} className="capitalize">{selectedReport?.inspection_status?.replace('_', ' ')}</Badge>
+            </div>
+            {/* ... Report Content ... */}
           </div>
-          <DialogFooter>
-            <Button onClick={() => setIsReportOpen(false)}>Close Report</Button>
-          </DialogFooter>
+          <DialogFooter><Button onClick={() => setIsReportOpen(false)}>Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-
     </>
   );
 };

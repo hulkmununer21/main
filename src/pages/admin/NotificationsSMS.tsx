@@ -1,513 +1,593 @@
-import { useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Checkbox } from "@/components/ui/checkbox";
-import { toast } from "sonner";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { 
-  Bell, 
-  MessageSquare, 
-  Mail, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  AlertCircle,
-  Send,
-  Users,
-  User,
-  Filter,
-  Search,
-  Plus
+  Send, Paperclip, Search, Plus, File, 
+  MoreVertical, Phone, Loader2, MessageSquare, 
+  Bell, CheckSquare, Square, X, ImageIcon, ClipboardList
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
+import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/contexts/useAuth";
+import { format, formatDistanceToNow, parseISO } from "date-fns";
+
+// === TYPES ===
+interface UserProfile {
+  id: string;
+  name: string;
+  role: string;
+  avatar_url?: string;
+  email?: string;
+}
+
+interface Thread {
+  id: string;
+  participants: string[];
+  last_message_preview: string;
+  updated_at: string;
+}
+
+interface Message {
+  id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+  attachments?: { name: string; type: string; url: string }[];
+}
+
+interface SentNotification {
+  id: string;
+  recipient_id: string;
+  notification_type: string;
+  message_body: string;
+  created_at: string;
+  status: string;
+}
 
 const NotificationsSMS = () => {
-  const [sendDialogOpen, setSendDialogOpen] = useState(false);
-  const [recipientType, setRecipientType] = useState("all");
-  const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
-  const [messageContent, setMessageContent] = useState("");
-  const [messageType, setMessageType] = useState("sms");
-  const [searchUser, setSearchUser] = useState("");
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  
+  // --- DATA STATE ---
+  const [userDirectory, setUserDirectory] = useState<Record<string, UserProfile>>({});
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  
+  // --- HISTORY STATE ---
+  const [notificationHistory, setNotificationHistory] = useState<SentNotification[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
-  const notifications = [
-    {
-      type: "Bin Reminder",
-      recipient: "Tom Brown - Room 5, 789 High St",
-      message: "Your bin duty is tomorrow. Please ensure bins are put out.",
-      channel: "SMS",
-      status: "Delivered",
-      sentAt: "2024-12-01 09:00",
-      deliveredAt: "2024-12-01 09:01"
-    },
-    {
-      type: "Payment Reminder",
-      recipient: "Lisa Green - Room 2, 123 Main St",
-      message: "Rent payment of £850 is overdue. Please make payment urgently.",
-      channel: "SMS + Email",
-      status: "Delivered",
-      sentAt: "2024-12-01 08:00",
-      deliveredAt: "2024-12-01 08:02"
-    },
-    {
-      type: "Inspection Notice",
-      recipient: "All Lodgers - 456 River Rd",
-      message: "Property inspection scheduled for December 8th at 10:00 AM.",
-      channel: "In-App",
-      status: "Sent",
-      sentAt: "2024-11-30 14:00",
-      deliveredAt: null
-    },
-    {
-      type: "Extra Charge Alert",
-      recipient: "Mark Johnson - Room 3, 456 River Rd",
-      message: "An extra charge of £75 has been added to your account for deep cleaning.",
-      channel: "SMS",
-      status: "Failed",
-      sentAt: "2024-11-29 16:00",
-      deliveredAt: null
-    },
-    {
-      type: "Maintenance Update",
-      recipient: "Sophie Chen - Room 1, 321 Park Ave",
-      message: "Your maintenance request has been completed. Please confirm.",
-      channel: "Email",
-      status: "Delivered",
-      sentAt: "2024-11-28 11:00",
-      deliveredAt: "2024-11-28 11:05"
-    },
-  ];
+  // --- UI STATE (CHAT) ---
+  const [inputText, setInputText] = useState("");
+  const [isNewChatOpen, setIsNewChatOpen] = useState(false);
+  const [selectedRecipient, setSelectedRecipient] = useState<string>("");
+  const [uploading, setUploading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  // --- FILE HANDLING STATE ---
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  const systemAlerts = [
-    { alert: "New complaint received from Tom Brown", priority: "High", time: "10 mins ago" },
-    { alert: "Bin duty missed at 789 High St - Room 5", priority: "Medium", time: "1 hour ago" },
-    { alert: "Payment received: £750 from Mark Johnson", priority: "Low", time: "2 hours ago" },
-    { alert: "Inspection report uploaded by John Smith", priority: "Low", time: "3 hours ago" },
-  ];
+  // --- UI STATE (BROADCAST) ---
+  const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
+  const [broadcastType, setBroadcastType] = useState("in_app");
+  const [broadcastRecipients, setBroadcastRecipients] = useState<string[]>([]);
+  const [broadcastMessage, setBroadcastMessage] = useState("");
 
-  const smsStats = {
-    sent: 156,
-    delivered: 142,
-    failed: 8,
-    pending: 6
-  };
+  // --- 1. INITIAL FETCH ---
+  useEffect(() => {
+    const initData = async () => {
+      if (!user) return;
+      setLoading(true);
 
-  // Mock user list for selection
-  const allUsers = [
-    { id: "1", name: "Tom Brown", type: "Lodger", phone: "+44 7xxx xxx001", property: "789 High St" },
-    { id: "2", name: "Lisa Green", type: "Lodger", phone: "+44 7xxx xxx002", property: "123 Main St" },
-    { id: "3", name: "Mark Johnson", type: "Lodger", phone: "+44 7xxx xxx003", property: "456 River Rd" },
-    { id: "4", name: "Sophie Chen", type: "Lodger", phone: "+44 7xxx xxx004", property: "321 Park Ave" },
-    { id: "5", name: "James Wilson", type: "Landlord", phone: "+44 7xxx xxx005", property: "Multiple" },
-    { id: "6", name: "Sarah Adams", type: "Landlord", phone: "+44 7xxx xxx006", property: "789 High St" },
-    { id: "7", name: "Mike Davis", type: "Staff", phone: "+44 7xxx xxx007", property: "All" },
-    { id: "8", name: "Emma White", type: "Staff", phone: "+44 7xxx xxx008", property: "All" },
-  ];
+      try {
+        // A. Build Directory
+        const [lodgers, staff, serviceUsers] = await Promise.all([
+          supabase.from('lodger_profiles').select('id, full_name, user_id, email'),
+          supabase.from('staff_profiles').select('id, full_name, user_id, email'),
+          supabase.from('service_user_profiles').select('id, full_name, user_id, email'),
+        ]);
 
-  const messageTemplates = [
-    { id: "rent", label: "Rent Reminder", content: "This is a reminder that your rent payment of £[AMOUNT] is due on [DATE]. Please ensure timely payment to avoid any late fees." },
-    { id: "bin", label: "Bin Duty Reminder", content: "Your bin duty is scheduled for tomorrow. Please ensure all bins are put out before 7:00 AM." },
-    { id: "inspection", label: "Inspection Notice", content: "A property inspection is scheduled for [DATE] at [TIME]. Please ensure access to all areas of the property." },
-    { id: "maintenance", label: "Maintenance Update", content: "Your maintenance request has been [STATUS]. [ADDITIONAL_INFO]" },
-    { id: "custom", label: "Custom Message", content: "" },
-  ];
+        const dir: Record<string, UserProfile> = {};
+        
+        lodgers.data?.forEach((u: any) => { if(u.user_id) dir[u.user_id] = { id: u.user_id, name: u.full_name, role: 'Lodger', email: u.email }; });
+        staff.data?.forEach((u: any) => { if(u.user_id) dir[u.user_id] = { id: u.user_id, name: u.full_name, role: 'Staff', email: u.email }; });
+        serviceUsers.data?.forEach((u: any) => { if(u.user_id) dir[u.user_id] = { id: u.user_id, name: u.full_name, role: 'Service User', email: u.email }; });
+        dir[user.id] = { id: user.id, name: "Me", role: "Admin" }; 
+        
+        setUserDirectory(dir);
 
-  const filteredUsers = allUsers.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchUser.toLowerCase()) ||
-                          user.property.toLowerCase().includes(searchUser.toLowerCase());
-    const matchesType = recipientType === "all" || 
-                        user.type.toLowerCase() === recipientType.toLowerCase();
-    return matchesSearch && matchesType;
-  });
+        // B. Fetch Threads
+        const { data: threadData, error } = await supabase
+          .from('message_threads')
+          .select('*')
+          .contains('participants', [user.id])
+          .order('updated_at', { ascending: false });
 
-  const toggleUserSelection = (userId: string) => {
-    setSelectedUsers(prev => 
-      prev.includes(userId) 
-        ? prev.filter(id => id !== userId)
-        : [...prev, userId]
-    );
-  };
+        if (error) throw error;
+        setThreads(threadData || []);
 
-  const selectAllFiltered = () => {
-    const filteredIds = filteredUsers.map(u => u.id);
-    setSelectedUsers(prev => {
-      const allSelected = filteredIds.every(id => prev.includes(id));
-      if (allSelected) {
-        return prev.filter(id => !filteredIds.includes(id));
+      } catch (error) {
+        console.error("Init Error:", error);
+      } finally {
+        setLoading(false);
       }
-      return [...new Set([...prev, ...filteredIds])];
+    };
+
+    initData();
+
+    // C. Realtime Inbox Listener
+    const threadSubscription = supabase
+      .channel('public:message_threads')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_threads' }, () => {
+         if(user) {
+             supabase.from('message_threads')
+             .select('*')
+             .contains('participants', [user.id])
+             .order('updated_at', { ascending: false })
+             .then(({ data }) => setThreads(data || []));
+         }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(threadSubscription); };
+  }, [user]);
+
+  // --- 2. FETCH HISTORY (When Dialog Opens) ---
+  useEffect(() => {
+    if (isHistoryOpen) {
+        const fetchHistory = async () => {
+            const { data } = await supabase
+                .from('notifications')
+                .select('*')
+                .eq('subject', 'Admin Notification') // ✅ Filter by fixed subject
+                .order('created_at', { ascending: false });
+            
+            if (data) setNotificationHistory(data);
+        };
+        fetchHistory();
+    }
+  }, [isHistoryOpen]);
+
+  // --- 3. CHAT LOGIC ---
+  useEffect(() => {
+    if (!activeThreadId) return;
+
+    const fetchMessages = async () => {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('thread_id', activeThreadId)
+        .order('created_at', { ascending: true });
+      
+      setMessages(data || []);
+      scrollToBottom();
+    };
+
+    fetchMessages();
+
+    const messageSub = supabase
+      .channel(`chat:${activeThreadId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `thread_id=eq.${activeThreadId}` }, (payload) => {
+        setMessages((prev) => [...prev, payload.new as Message]);
+        scrollToBottom();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(messageSub); };
+  }, [activeThreadId]);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }, 100);
+  };
+
+  const getOtherParticipant = (thread: Thread) => {
+    if (!user) return null;
+    const otherId = thread.participants.find(id => id !== user.id);
+    return otherId ? userDirectory[otherId] : { name: "Unknown", role: "" };
+  };
+
+  // --- 4. FILE HANDLING ---
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        const file = e.target.files[0];
+        setSelectedFile(file);
+        if (file.type.startsWith('image/')) {
+            setPreviewUrl(URL.createObjectURL(file));
+        } else {
+            setPreviewUrl(null);
+        }
+    }
+  };
+
+  const clearAttachment = () => {
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // --- 5. ACTIONS ---
+
+  const handleSendMessage = async () => {
+    if (!activeThreadId || !user) {
+        toast.error("No active conversation");
+        return;
+    }
+    const hasText = inputText.trim().length > 0;
+    if (!hasText && !selectedFile) return;
+
+    let attachments = [];
+    
+    if (selectedFile) {
+      setUploading(true);
+      const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
+      const filePath = `${activeThreadId}/${Date.now()}_${sanitizedName}`;
+      try {
+        const { error: uploadError } = await supabase.storage.from('chat-attachments').upload(filePath, selectedFile);
+        if (uploadError) throw uploadError;
+        const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
+        attachments.push({ name: selectedFile.name, type: selectedFile.type, url: data.publicUrl });
+      } catch (e: any) {
+        toast.error("Upload failed: " + e.message);
+        setUploading(false);
+        return;
+      }
+      setUploading(false);
+    }
+
+    const { error } = await supabase.from('messages').insert({
+      thread_id: activeThreadId,
+      sender_id: user.id,
+      content: inputText,
+      attachments: attachments.length > 0 ? attachments : null
     });
-  };
 
-  const handleSendMessage = () => {
-    if (selectedUsers.length === 0) {
-      toast.error("Please select at least one recipient");
-      return;
-    }
-    if (!messageContent.trim()) {
-      toast.error("Please enter a message");
-      return;
-    }
-
-    // Mock send - in production this would call an API
-    toast.success(`${messageType.toUpperCase()} sent to ${selectedUsers.length} recipient(s)`);
-    setSendDialogOpen(false);
-    setSelectedUsers([]);
-    setMessageContent("");
-  };
-
-  const applyTemplate = (templateId: string) => {
-    const template = messageTemplates.find(t => t.id === templateId);
-    if (template) {
-      setMessageContent(template.content);
+    if (error) {
+        toast.error("Failed to send message");
+    } else {
+        setInputText("");
+        clearAttachment();
     }
   };
+
+  const handleCreateThread = async () => {
+    if (!selectedRecipient || !user) return;
+    setUploading(true);
+
+    try {
+        const { data: existing } = await supabase
+            .from('message_threads')
+            .select('*')
+            .contains('participants', [user.id, selectedRecipient]);
+
+        const found = existing?.find(t => t.participants.length === 2);
+
+        if (found) {
+            setActiveThreadId(found.id);
+            setIsNewChatOpen(false);
+            setUploading(false);
+            return;
+        }
+
+        const { data, error } = await supabase.from('message_threads').insert({
+            participants: [user.id, selectedRecipient],
+            last_message_preview: "Chat started",
+            updated_at: new Date().toISOString()
+        }).select().single();
+
+        if (error) throw error;
+
+        if (data) {
+            setThreads(prev => [data, ...prev]);
+            setActiveThreadId(data.id);
+            setIsNewChatOpen(false);
+        }
+    } catch (e: any) {
+        toast.error("Error creating chat: " + e.message);
+    } finally {
+        setUploading(false);
+    }
+  };
+
+  // ✅ UPDATED BROADCAST HANDLER
+  const handleBroadcast = async () => {
+    if (broadcastRecipients.length === 0) return toast.error("Select at least one recipient");
+    if (!broadcastMessage.trim()) return toast.error("Message is required");
+    
+    setUploading(true);
+
+    try {
+        // Construct Payload with FIXED subject "Admin Notification"
+        const payloads = broadcastRecipients.map(uid => ({
+            recipient_id: uid,
+            subject: "Admin Notification",   // ✅ Fixed Subject
+            message_body: broadcastMessage,
+            notification_type: broadcastType,
+            priority: 'medium', 
+                            
+            metadata: {},                    
+            
+        }));
+
+        const { error } = await supabase.from('notifications').insert(payloads);
+        
+        if (error) {
+            console.error("Broadcast Error:", error);
+            throw error;
+        }
+
+        toast.success(`Broadcast sent to ${broadcastRecipients.length} users`);
+        setIsBroadcastOpen(false);
+        setBroadcastMessage("");
+        setBroadcastRecipients([]);
+    } catch (err: any) {
+        toast.error("Failed to send: " + err.message);
+    } finally {
+        setUploading(false);
+    }
+  };
+
+  // --- RENDER HELPERS ---
+  const groupedUsers = useMemo(() => {
+    const groups: Record<string, UserProfile[]> = { 'Staff': [], 'Lodger': [], 'Service User': [] };
+    Object.values(userDirectory).forEach(u => {
+        if (u.id !== user?.id) {
+            if (!groups[u.role]) groups[u.role] = [];
+            groups[u.role].push(u);
+        }
+    });
+    return groups;
+  }, [userDirectory, user]);
+
+  const usersList = useMemo(() => Object.values(userDirectory).filter(u => u.id !== user?.id), [userDirectory, user]);
+
+  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary"/></div>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-start">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground mb-2">Notifications & SMS Management</h2>
-          <p className="text-muted-foreground">Send messages and monitor communication logs</p>
-        </div>
-        <Dialog open={sendDialogOpen} onOpenChange={setSendDialogOpen}>
-          <DialogTrigger asChild>
-            <Button size="lg">
-              <Send className="w-4 h-4 mr-2" />
-              Send New Message
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Send Notification</DialogTitle>
-              <DialogDescription>
-                Compose and send SMS, email, or in-app notifications to users
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-6 py-4">
-              {/* Message Type */}
-              <div className="space-y-2">
-                <Label>Message Type</Label>
-                <div className="flex gap-2">
-                  <Button 
-                    variant={messageType === "sms" ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => setMessageType("sms")}
-                  >
-                    <MessageSquare className="w-4 h-4 mr-2" />
-                    SMS
-                  </Button>
-                  <Button 
-                    variant={messageType === "email" ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => setMessageType("email")}
-                  >
-                    <Mail className="w-4 h-4 mr-2" />
-                    Email
-                  </Button>
-                  <Button 
-                    variant={messageType === "inapp" ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => setMessageType("inapp")}
-                  >
-                    <Bell className="w-4 h-4 mr-2" />
-                    In-App
-                  </Button>
-                  <Button 
-                    variant={messageType === "all" ? "default" : "outline"} 
-                    size="sm"
-                    onClick={() => setMessageType("all")}
-                  >
-                    <Users className="w-4 h-4 mr-2" />
-                    All Channels
-                  </Button>
-                </div>
-              </div>
-
-              {/* Recipient Selection */}
-              <div className="space-y-3">
-                <Label>Select Recipients</Label>
-                <div className="flex gap-2">
-                  <Select value={recipientType} onValueChange={setRecipientType}>
-                    <SelectTrigger className="w-40">
-                      <SelectValue placeholder="Filter by type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Users</SelectItem>
-                      <SelectItem value="lodger">Lodgers</SelectItem>
-                      <SelectItem value="landlord">Landlords</SelectItem>
-                      <SelectItem value="staff">Staff</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input 
-                      placeholder="Search users..." 
-                      value={searchUser}
-                      onChange={(e) => setSearchUser(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-                </div>
-
-                <div className="border rounded-lg max-h-48 overflow-y-auto">
-                  <div className="p-2 border-b bg-muted/50 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Checkbox 
-                        checked={filteredUsers.length > 0 && filteredUsers.every(u => selectedUsers.includes(u.id))}
-                        onCheckedChange={selectAllFiltered}
-                      />
-                      <span className="text-sm font-medium">Select All ({filteredUsers.length})</span>
+    <div className="flex h-[calc(100vh-4rem)] bg-background">
+      
+      {/* --- SIDEBAR --- */}
+      <div className="w-80 border-r flex flex-col bg-muted/10">
+        <div className="p-4 border-b flex justify-between items-center bg-background">
+          <h2 className="font-semibold text-lg">Messages</h2>
+          <div className="flex gap-1">
+            
+            {/* History Button (New) */}
+            <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+                <DialogTrigger asChild>
+                    <Button size="icon" variant="ghost" title="Sent History"><ClipboardList className="h-5 w-5" /></Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle>Sent Admin Notifications</DialogTitle>
+                        <DialogDescription>History of broadcasts sent by administrators.</DialogDescription>
+                    </DialogHeader>
+                    <div className="flex-1 overflow-auto border rounded-md">
+                        <table className="w-full text-sm">
+                            <thead className="bg-muted sticky top-0">
+                                <tr>
+                                    <th className="p-3 text-left font-medium">Recipient</th>
+                                    <th className="p-3 text-left font-medium">Type</th>
+                                    <th className="p-3 text-left font-medium">Message</th>
+                                    <th className="p-3 text-left font-medium">Sent</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {notificationHistory.length === 0 ? (
+                                    <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">No history found.</td></tr>
+                                ) : notificationHistory.map(n => {
+                                    const recipientName = userDirectory[n.recipient_id]?.name || "Unknown";
+                                    return (
+                                        <tr key={n.id} className="border-b last:border-0 hover:bg-muted/30">
+                                            <td className="p-3">{recipientName}</td>
+                                            <td className="p-3 capitalize">{n.notification_type?.replace('_', ' ')}</td>
+                                            <td className="p-3 max-w-xs truncate" title={n.message_body}>{n.message_body}</td>
+                                            <td className="p-3 whitespace-nowrap text-muted-foreground">{format(parseISO(n.created_at), 'MMM d, p')}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
-                    <Badge variant="secondary">{selectedUsers.length} selected</Badge>
-                  </div>
-                  {filteredUsers.map(user => (
-                    <div 
-                      key={user.id} 
-                      className="p-2 flex items-center gap-3 hover:bg-muted/50 cursor-pointer border-b last:border-0"
-                      onClick={() => toggleUserSelection(user.id)}
-                    >
-                      <Checkbox checked={selectedUsers.includes(user.id)} />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{user.name}</p>
-                        <p className="text-xs text-muted-foreground">{user.property} • {user.phone}</p>
-                      </div>
-                      <Badge variant="outline" className="text-xs">{user.type}</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
+                    <DialogFooter><Button onClick={() => setIsHistoryOpen(false)}>Close</Button></DialogFooter>
+                </DialogContent>
+            </Dialog>
 
-              {/* Message Templates */}
-              <div className="space-y-2">
-                <Label>Quick Templates</Label>
-                <div className="flex flex-wrap gap-2">
-                  {messageTemplates.map(template => (
-                    <Button 
-                      key={template.id}
-                      variant="outline" 
-                      size="sm"
-                      onClick={() => applyTemplate(template.id)}
-                    >
-                      {template.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Message Content */}
-              <div className="space-y-2">
-                <Label htmlFor="message">Message Content</Label>
-                <Textarea 
-                  id="message"
-                  placeholder="Type your message here..."
-                  value={messageContent}
-                  onChange={(e) => setMessageContent(e.target.value)}
-                  className="min-h-32"
-                />
-                <p className="text-xs text-muted-foreground">
-                  {messageContent.length} characters • SMS messages over 160 characters will be split
-                </p>
-              </div>
-
-              {/* Preview */}
-              {messageContent && selectedUsers.length > 0 && (
-                <Card className="bg-muted/50">
-                  <CardHeader className="py-3">
-                    <CardTitle className="text-sm">Preview</CardTitle>
-                  </CardHeader>
-                  <CardContent className="py-2">
-                    <p className="text-sm">
-                      <span className="font-medium">To:</span> {selectedUsers.length} recipient(s)
-                    </p>
-                    <p className="text-sm">
-                      <span className="font-medium">Via:</span> {messageType.toUpperCase()}
-                    </p>
-                    <p className="text-sm mt-2 italic">"{messageContent}"</p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setSendDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleSendMessage}>
-                <Send className="w-4 h-4 mr-2" />
-                Send {messageType === "all" ? "to All Channels" : messageType.toUpperCase()}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
-
-      {/* SMS Statistics */}
-      <div className="grid md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary/10 p-3 rounded-full">
-                <MessageSquare className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{smsStats.sent}</p>
-                <p className="text-sm text-muted-foreground">SMS Sent</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-green-500/10 p-3 rounded-full">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{smsStats.delivered}</p>
-                <p className="text-sm text-muted-foreground">Delivered</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-destructive/10 p-3 rounded-full">
-                <XCircle className="w-5 h-5 text-destructive" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{smsStats.failed}</p>
-                <p className="text-sm text-muted-foreground">Failed</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-secondary/10 p-3 rounded-full">
-                <Clock className="w-5 h-5 text-secondary-foreground" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{smsStats.pending}</p>
-                <p className="text-sm text-muted-foreground">Pending</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* System Alerts */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>System Alerts</CardTitle>
-              <CardDescription>Real-time platform notifications and events</CardDescription>
-            </div>
-            <Button variant="outline">Mark All as Read</Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {systemAlerts.map((alert, index) => (
-              <div key={index} className="flex items-start gap-3 pb-3 border-b last:border-0">
-                <AlertCircle className={`w-4 h-4 mt-1 ${
-                  alert.priority === "High" ? "text-destructive" :
-                  alert.priority === "Medium" ? "text-amber-500" :
-                  "text-muted-foreground"
-                }`} />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-medium">{alert.alert}</p>
-                    <Badge variant={
-                      alert.priority === "High" ? "destructive" :
-                      alert.priority === "Medium" ? "secondary" :
-                      "outline"
-                    } className="text-xs">
-                      {alert.priority}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">{alert.time}</p>
-                </div>
-                <Button size="sm" variant="ghost">View</Button>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Communication Logs */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>Communication Logs</CardTitle>
-              <CardDescription>Sent SMS, emails, and in-app notifications</CardDescription>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm">
-                <Filter className="w-4 h-4 mr-2" />
-                Filter
-              </Button>
-              <Button variant="outline" size="sm">Export</Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {notifications.map((notification, index) => (
-              <Card key={index} className="border-border">
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h4 className="font-semibold">{notification.type}</h4>
-                        <Badge variant="outline" className="flex items-center gap-1">
-                          {notification.channel.includes("SMS") && <MessageSquare className="w-3 h-3" />}
-                          {notification.channel.includes("Email") && <Mail className="w-3 h-3" />}
-                          {notification.channel.includes("In-App") && <Bell className="w-3 h-3" />}
-                          {notification.channel}
-                        </Badge>
-                        <Badge variant={
-                          notification.status === "Delivered" ? "default" :
-                          notification.status === "Failed" ? "destructive" :
-                          "secondary"
-                        }>
-                          {notification.status === "Delivered" && <CheckCircle className="w-3 h-3 mr-1" />}
-                          {notification.status === "Failed" && <XCircle className="w-3 h-3 mr-1" />}
-                          {notification.status}
-                        </Badge>
-                      </div>
-                      <div className="text-sm text-muted-foreground space-y-1">
-                        <p><span className="font-medium text-foreground">To:</span> {notification.recipient}</p>
-                        <p className="text-foreground italic">"{notification.message}"</p>
-                        <div className="flex gap-4 text-xs">
-                          <p>Sent: {notification.sentAt}</p>
-                          {notification.deliveredAt && <p>Delivered: {notification.deliveredAt}</p>}
+            {/* Broadcast Button */}
+            <Dialog open={isBroadcastOpen} onOpenChange={setIsBroadcastOpen}>
+                <DialogTrigger asChild><Button size="icon" variant="ghost" title="Broadcast"><Bell className="h-5 w-5" /></Button></DialogTrigger>
+                <DialogContent>
+                    <DialogHeader><DialogTitle>Send Admin Notification</DialogTitle><DialogDescription>This message will be sent with the subject "Admin Notification".</DialogDescription></DialogHeader>
+                    <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                            <Label>Channel</Label>
+                            <div className="flex gap-2">
+                                {['in_app', 'sms', 'email'].map(t => (
+                                    <Button key={t} size="sm" variant={broadcastType === t ? 'default' : 'outline'} onClick={() => setBroadcastType(t)} className="capitalize">
+                                        {t.replace('_', ' ')}
+                                    </Button>
+                                ))}
+                            </div>
                         </div>
-                      </div>
+                        <div className="space-y-2">
+                            <Label>Recipients</Label>
+                            <ScrollArea className="h-32 border rounded-md p-2">
+                                {usersList.map(u => (
+                                    <div key={u.id} className="flex items-center gap-2 py-1" onClick={() => setBroadcastRecipients(prev => prev.includes(u.id) ? prev.filter(i => i !== u.id) : [...prev, u.id])}>
+                                        {broadcastRecipients.includes(u.id) ? <CheckSquare className="h-4 w-4 text-primary"/> : <Square className="h-4 w-4"/>}
+                                        <span className="text-sm cursor-pointer">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></span>
+                                    </div>
+                                ))}
+                            </ScrollArea>
+                            <p className="text-xs text-muted-foreground">{broadcastRecipients.length} selected</p>
+                        </div>
+                        
+                        <div className="space-y-2">
+                            <Label>Message</Label>
+                            <Textarea 
+                                value={broadcastMessage} 
+                                onChange={e => setBroadcastMessage(e.target.value)} 
+                                placeholder="Type your broadcast message..." 
+                            />
+                        </div>
                     </div>
-                    <div className="flex flex-col gap-2 ml-4">
-                      {notification.status === "Failed" ? (
-                        <Button size="sm" variant="destructive">Resend</Button>
-                      ) : (
-                        <Button size="sm" variant="outline">View Details</Button>
+                    <DialogFooter><Button onClick={handleBroadcast} disabled={uploading}>Send Broadcast</Button></DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* New Chat Button */}
+            <Dialog open={isNewChatOpen} onOpenChange={setIsNewChatOpen}>
+                <DialogTrigger asChild><Button size="icon" variant="ghost"><Plus className="h-5 w-5" /></Button></DialogTrigger>
+                <DialogContent>
+                <DialogHeader><DialogTitle>New Chat</DialogTitle></DialogHeader>
+                <div className="py-4">
+                    <Label>Select Recipient</Label>
+                    <Select onValueChange={setSelectedRecipient}>
+                    <SelectTrigger className="mt-2"><SelectValue placeholder="Select user..." /></SelectTrigger>
+                    <SelectContent>
+                        {Object.entries(groupedUsers).map(([role, users]) => (
+                            users.length > 0 && (
+                                <SelectGroup key={role}>
+                                    <SelectLabel>{role}s</SelectLabel>
+                                    {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                                </SelectGroup>
+                            )
+                        ))}
+                    </SelectContent>
+                    </Select>
+                </div>
+                <DialogFooter><Button onClick={handleCreateThread} disabled={!selectedRecipient || uploading}>Start Chat</Button></DialogFooter>
+                </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+        
+        <div className="p-3 border-b bg-background">
+          <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input placeholder="Search messages..." className="pl-8 bg-muted/20" /></div>
+        </div>
+
+        <ScrollArea className="flex-1">
+          <div className="flex flex-col">
+            {threads.length === 0 ? <div className="p-8 text-center text-muted-foreground text-sm">No conversations.</div> : 
+            threads.map((thread) => {
+              const otherUser = getOtherParticipant(thread);
+              const isActive = activeThreadId === thread.id;
+              return (
+                <button key={thread.id} onClick={() => setActiveThreadId(thread.id)} className={`flex items-start gap-3 p-4 text-left border-b transition-colors hover:bg-muted/50 ${isActive ? 'bg-primary/5 border-l-4 border-l-primary' : ''}`}>
+                  <Avatar><AvatarImage src={otherUser?.avatar_url} /><AvatarFallback>{otherUser?.name?.charAt(0)}</AvatarFallback></Avatar>
+                  <div className="flex-1 overflow-hidden">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-medium truncate">{otherUser?.name || "Unknown"}</span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">{formatDistanceToNow(parseISO(thread.updated_at), { addSuffix: true })}</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate">{thread.last_message_preview}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </ScrollArea>
+      </div>
+
+      {/* --- MAIN CHAT AREA --- */}
+      <div className="flex-1 flex flex-col bg-background">
+        {activeThreadId ? (
+          <>
+            <header className="h-16 border-b flex items-center justify-between px-6 bg-background/95 backdrop-blur sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <Avatar className="h-9 w-9"><AvatarFallback>{getOtherParticipant(threads.find(t => t.id === activeThreadId)!)?.name?.charAt(0)}</AvatarFallback></Avatar>
+                <div>
+                  <h3 className="font-semibold text-sm">{getOtherParticipant(threads.find(t => t.id === activeThreadId)!)?.name}</h3>
+                  <p className="text-xs text-muted-foreground">{getOtherParticipant(threads.find(t => t.id === activeThreadId)!)?.role}</p>
+                </div>
+              </div>
+              <div className="flex gap-2"><Button variant="ghost" size="icon"><Phone className="h-4 w-4" /></Button><Button variant="ghost" size="icon"><MoreVertical className="h-4 w-4" /></Button></div>
+            </header>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-muted/5" ref={scrollRef}>
+              {messages.map((msg) => {
+                const isMe = msg.sender_id === user?.id;
+                return (
+                  <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[70%] rounded-lg p-3 ${isMe ? 'bg-primary text-primary-foreground rounded-tr-none' : 'bg-muted rounded-tl-none'}`}>
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="mb-2 space-y-2">
+                          {msg.attachments.map((att, idx) => (
+                            <div key={idx}>
+                                {att.type.startsWith('image') ? 
+                                    <img src={att.url} alt="attachment" className="rounded-md max-h-48 object-cover border" /> : 
+                                    <a href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-black/10 p-2 rounded hover:bg-black/20 text-xs"><File className="h-4 w-4" /> {att.name}</a>
+                                }
+                            </div>
+                          ))}
+                        </div>
                       )}
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <p className={`text-[10px] mt-1 text-right ${isMe ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>{format(parseISO(msg.created_at), 'p')}</p>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
+                );
+              })}
+            </div>
+
+            <div className="p-4 bg-background border-t">
+              {/* Attachment Preview Area */}
+              {selectedFile && (
+                <div className="flex items-center gap-3 mb-3 p-2 bg-muted/30 rounded border w-fit">
+                    {previewUrl ? (
+                        <img src={previewUrl} className="h-10 w-10 object-cover rounded" />
+                    ) : (
+                        <div className="h-10 w-10 bg-gray-200 rounded flex items-center justify-center"><File className="h-5 w-5 text-gray-500" /></div>
+                    )}
+                    <div className="text-xs">
+                        <p className="font-medium max-w-[150px] truncate">{selectedFile.name}</p>
+                        <p className="text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-2" onClick={clearAttachment}>
+                        <X className="h-3 w-3" />
+                    </Button>
+                </div>
+              )}
+
+              <div className="flex gap-2 items-end">
+                <div className="flex gap-2 pb-2">
+                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
+                    <Button variant="outline" size="icon" className={`shrink-0 ${selectedFile ? 'text-primary border-primary' : ''}`} onClick={() => fileInputRef.current?.click()}>
+                        {selectedFile ? <ImageIcon className="h-4 w-4"/> : <Paperclip className="h-4 w-4" />}
+                    </Button>
+                </div>
+                <Input 
+                    value={inputText} 
+                    onChange={(e) => setInputText(e.target.value)} 
+                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()} 
+                    placeholder="Type a message..." 
+                    className="flex-1 min-h-[2.5rem]" 
+                    autoFocus 
+                />
+                <Button onClick={handleSendMessage} disabled={uploading}>
+                    {uploading ? <Loader2 className="h-4 w-4 animate-spin"/> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-muted/10">
+            <div className="h-20 w-20 bg-muted rounded-full flex items-center justify-center mb-4"><MessageSquare className="h-10 w-10 opacity-20" /></div>
+            <h3 className="text-lg font-medium">Select a conversation</h3>
+            <p className="text-sm">Choose a thread from the sidebar or start a new chat.</p>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
     </div>
   );
 };
