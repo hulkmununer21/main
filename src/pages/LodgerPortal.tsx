@@ -418,3 +418,5 @@ const LodgerPortal = () => {
 };
 
 export default LodgerPortal; 
+
+/// The code above is the complete LodgerPortal.tsx file with the LodgerDocuments component properly imported and integrated.
