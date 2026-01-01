@@ -417,4 +417,4 @@ const LodgerPortal = () => {
   );
 };
 
-export default LodgerPortal;
+export default LodgerPortal; 
