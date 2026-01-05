@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Calendar, Clock, MapPin, UserCheck, CheckCircle, FileText, ChevronRight, AlertTriangle, Loader2, DoorOpen, ListChecks, X } from "lucide-react";
-import { format, parseISO, isAfter } from "date-fns";
+import { format, parseISO, isPast } from "date-fns";
 
 // === PROPS ===
 interface LodgerInspectionsProps {
@@ -18,13 +18,11 @@ interface LodgerInspectionsProps {
 
 const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
   const [loading, setLoading] = useState(true);
-  const [nextInspection, setNextInspection] = useState<any>(null);
+  
+  const [upcomingInspections, setUpcomingInspections] = useState<any[]>([]); 
   const [history, setHistory] = useState<any[]>([]);
   
-  // Cache for inspector names so we don't need joins
   const [inspectorNames, setInspectorNames] = useState<Record<string, string>>({});
-
-  // View Report State
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [isReportOpen, setIsReportOpen] = useState(false);
 
@@ -34,57 +32,47 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
       setLoading(true);
 
       try {
-        // 1. Fetch Inspections (No Joins to avoid FK Error)
+        // 1. Fetch Inspections
         const { data: rawInspections, error } = await supabase
           .from('inspections')
-          .select('*') // Just select raw columns
+          .select('*')
           .eq('property_id', tenancy.property_id)
           .order('scheduled_date', { ascending: false });
 
         if (error) throw error;
 
-        // 2. Filter Logic (Property Wide OR My Room)
+        // 2. Filter Scope
         const relevantInspections = (rawInspections || []).filter((insp: any) => {
             const isPropertyWide = insp.room_id === null;
             const isMyRoom = insp.room_id === tenancy.room_id;
             return isPropertyWide || isMyRoom;
         });
 
-        // 3. Resolve Inspector Names Manually
-        // Collect all inspector IDs
-        const staffIds = relevantInspections
-            .filter((i: any) => i.inspector_type === 'staff' && i.inspector_id)
-            .map((i: any) => i.inspector_id);
-            
-        const serviceUserIds = relevantInspections
-            .filter((i: any) => i.inspector_type === 'service_user' && i.inspector_id)
-            .map((i: any) => i.inspector_id);
-
+        // 3. Resolve Inspector Names
+        const staffIds = relevantInspections.filter((i: any) => i.inspector_type === 'staff').map((i: any) => i.inspector_id);
+        const serviceUserIds = relevantInspections.filter((i: any) => i.inspector_type === 'service_user').map((i: any) => i.inspector_id);
         const namesMap: Record<string, string> = {};
 
-        // Fetch Staff Names
         if (staffIds.length > 0) {
             const { data: staff } = await supabase.from('staff_profiles').select('id, full_name').in('id', staffIds);
             staff?.forEach((s: any) => namesMap[s.id] = `${s.full_name} (Staff)`);
         }
-
-        // Fetch Service User Names
         if (serviceUserIds.length > 0) {
             const { data: users } = await supabase.from('service_user_profiles').select('id, full_name, company_name').in('id', serviceUserIds);
             users?.forEach((u: any) => namesMap[u.id] = `${u.full_name} (${u.company_name || 'Contractor'})`);
         }
-        
         setInspectorNames(namesMap);
 
-        // 4. Sort and Split
-        const now = new Date();
+        // 4. SORT & SPLIT
         const upcoming = relevantInspections
-            .filter((i: any) => isAfter(parseISO(i.scheduled_date), now) && i.inspection_status === 'scheduled')
-            .sort((a: any, b: any) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime())[0];
+            .filter((i: any) => i.inspection_status === 'scheduled' || i.inspection_status === 'pending')
+            .sort((a: any, b: any) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime());
 
-        const past = relevantInspections.filter((i: any) => i.id !== upcoming?.id);
+        const past = relevantInspections
+            .filter((i: any) => i.inspection_status !== 'scheduled' && i.inspection_status !== 'pending')
+            .sort((a: any, b: any) => new Date(b.scheduled_date).getTime() - new Date(a.scheduled_date).getTime());
 
-        setNextInspection(upcoming || null);
+        setUpcomingInspections(upcoming);
         setHistory(past);
 
       } catch (err) {
@@ -100,169 +88,170 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
   if (loading) return <div className="h-64 flex items-center justify-center"><Loader2 className="animate-spin text-primary h-8 w-8" /></div>;
 
   return (
-    <div className="space-y-6 max-w-[1600px]">
+    <div className="space-y-8 max-w-[1600px]">
       
-      {/* HEADER */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Inspections</h2>
         <p className="text-muted-foreground">Monitor property checks and compliance reports.</p>
       </div>
 
-      {/* 1. NEXT INSPECTION CARD */}
-      {nextInspection ? (
-        <Card className="border-l-4 border-l-blue-500 shadow-sm bg-blue-50/10">
-            <CardHeader>
-            <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                <CardTitle className="flex items-center gap-2 text-blue-800">
-                    <Calendar className="h-5 w-5" />
-                    Upcoming Inspection
-                </CardTitle>
-                <CardDescription>
-                    {nextInspection.room_id 
-                        ? "The inspector requires access to your private room." 
-                        : "Inspector will check common areas (Kitchen, Hallways)."}
-                </CardDescription>
-                </div>
-                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1">
-                    {nextInspection.room_id ? "Room Inspection" : "Property Inspection"}
-                </Badge>
+      {/* 1. UPCOMING INSPECTIONS SECTION (Redesigned UI) */}
+      <div className="space-y-4">
+        {upcomingInspections.length > 0 ? (
+            <div className="space-y-4">
+                {upcomingInspections.map((inspection) => (
+                    <Card key={inspection.id} className="border-l-4 border-l-blue-500 shadow-sm overflow-hidden">
+                        <CardContent className="p-0">
+                            <div className="flex flex-col md:flex-row">
+                                
+                                {/* Left: Date & Status Banner */}
+                                <div className="bg-blue-50 p-6 flex flex-col justify-center items-center md:w-48 text-center shrink-0 border-r border-blue-100">
+                                    <Badge className="bg-blue-600 text-white hover:bg-blue-700 mb-2">Scheduled</Badge>
+                                    <div className="text-3xl font-bold text-blue-900 mb-1">
+                                        {format(parseISO(inspection.scheduled_date), "d")}
+                                    </div>
+                                    <div className="text-sm font-medium text-blue-700 uppercase">
+                                        {format(parseISO(inspection.scheduled_date), "MMM yyyy")}
+                                    </div>
+                                    <div className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-blue-800 bg-blue-100 px-2 py-1 rounded-full">
+                                        <Clock className="w-3 h-3" />
+                                        {format(parseISO(inspection.scheduled_date), "h:mm a")}
+                                    </div>
+                                </div>
+
+                                {/* Right: Details */}
+                                <div className="p-6 flex-1 flex flex-col justify-center">
+                                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
+                                        <div>
+                                            <h3 className="text-lg font-bold text-gray-900 capitalize flex items-center gap-2">
+                                                {inspection.inspection_type?.replace('_', ' ')}
+                                                {inspection.room_id ? (
+                                                    <Badge variant="outline" className="text-xs font-normal border-purple-200 text-purple-700 bg-purple-50">Room Check</Badge>
+                                                ) : (
+                                                    <Badge variant="outline" className="text-xs font-normal border-orange-200 text-orange-700 bg-orange-50">Property Wide</Badge>
+                                                )}
+                                            </h3>
+                                            <p className="text-sm text-muted-foreground mt-1">
+                                                {inspection.room_id 
+                                                    ? "This inspection is for your private room." 
+                                                    : "This inspection covers common areas (Kitchen, Living Room, etc)."}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                                        <div className="flex items-start gap-3 p-3 bg-muted/20 rounded-lg">
+                                            <UserCheck className="h-5 w-5 text-gray-500 mt-0.5" />
+                                            <div>
+                                                <p className="text-xs font-bold text-gray-500 uppercase">Inspector</p>
+                                                <p className="text-sm font-medium text-gray-900 truncate">
+                                                    {inspectorNames[inspection.inspector_id] || "Assigned Inspector"}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-start gap-3 p-3 bg-muted/20 rounded-lg">
+                                            <MapPin className="h-5 w-5 text-gray-500 mt-0.5" />
+                                            <div>
+                                                <p className="text-xs font-bold text-gray-500 uppercase">Scope</p>
+                                                <p className="text-sm font-medium text-gray-900">
+                                                    {inspection.room_id ? "Private Room" : "Common Areas"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {isPast(parseISO(inspection.scheduled_date)) && (
+                                        <div className="mt-4 p-2 bg-orange-50 text-orange-800 text-xs rounded border border-orange-100 flex items-center gap-2">
+                                            <AlertTriangle className="h-4 w-4" />
+                                            This inspection date has passed. Please wait for the inspector to submit the report.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                ))}
             </div>
-            </CardHeader>
-            <CardContent>
-            <div className="grid md:grid-cols-3 gap-6">
-                
-                <div className="space-y-4">
-                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
-                    <div className="h-10 w-10 rounded-full bg-blue-50 border-blue-100 flex items-center justify-center">
-                    <Clock className="h-5 w-5 text-blue-600" />
+        ) : (
+            <Card className="bg-muted/10 border-dashed">
+                <CardContent className="p-8 flex flex-col items-center justify-center text-center">
+                    <div className="h-12 w-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-3">
+                        <CheckCircle className="h-6 w-6" />
                     </div>
-                    <div>
-                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Date & Time</p>
-                    <p className="font-bold text-gray-900">
-                        {format(parseISO(nextInspection.scheduled_date), "EEE, d MMM yyyy")}
+                    <h3 className="font-semibold text-lg">No Inspections Scheduled</h3>
+                    <p className="text-muted-foreground text-sm max-w-sm mt-1">
+                        You are all caught up! We will notify you when the next property check is arranged.
                     </p>
-                    <p className="text-sm text-gray-600">{format(parseISO(nextInspection.scheduled_date), "h:mm a")}</p>
-                    </div>
-                </div>
-                </div>
-
-                <div className="space-y-4">
-                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
-                    <div className="h-10 w-10 rounded-full bg-purple-50 border-purple-100 flex items-center justify-center">
-                    <UserCheck className="h-5 w-5 text-purple-600" />
-                    </div>
-                    <div>
-                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Inspector</p>
-                    <p className="font-bold text-gray-900 truncate max-w-[150px]">
-                        {inspectorNames[nextInspection.inspector_id] || "Assigned Inspector"}
-                    </p>
-                    <p className="text-xs text-muted-foreground capitalize">{nextInspection.inspection_type.replace('_', ' ')}</p>
-                    </div>
-                </div>
-                </div>
-
-                <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide flex items-center gap-2 mb-2">
-                    <MapPin className="h-3 w-3" /> Location Scope:
-                </p>
-                <div className="flex flex-wrap gap-2">
-                    {nextInspection.room_id ? (
-                        <Badge variant="outline" className="bg-white gap-1 py-1"><DoorOpen className="w-3 h-3"/> My Room</Badge>
-                    ) : (
-                        <>
-                            <Badge variant="outline" className="bg-white">Kitchen</Badge>
-                            <Badge variant="outline" className="bg-white">Hallways</Badge>
-                            <Badge variant="outline" className="bg-white">Shared Bath</Badge>
-                        </>
-                    )}
-                </div>
-                </div>
-
-            </div>
-            </CardContent>
-        </Card>
-      ) : (
-        <Card className="bg-muted/10 border-dashed">
-            <CardContent className="p-8 flex flex-col items-center justify-center text-center">
-                <div className="h-12 w-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-3">
-                    <CheckCircle className="h-6 w-6" />
-                </div>
-                <h3 className="font-semibold text-lg">No Inspections Scheduled</h3>
-                <p className="text-muted-foreground text-sm max-w-sm mt-1">
-                    You are all caught up! We will notify you when the next property check is arranged.
-                </p>
-            </CardContent>
-        </Card>
-      )}
+                </CardContent>
+            </Card>
+        )}
+      </div>
 
       {/* 2. HISTORY TABLE */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Inspection History</CardTitle>
-          <CardDescription>Past reports and outcomes for this property.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="relative w-full overflow-auto">
-            <table className="w-full caption-bottom text-sm text-left">
-              <thead className="[&_tr]:border-b">
-                <tr className="border-b transition-colors hover:bg-muted/50">
-                  <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Date</th>
-                  <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Scope</th>
-                  <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Type</th>
-                  <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Result</th>
-                  <th className="h-12 px-4 align-middle font-medium text-muted-foreground text-right">Report</th>
-                </tr>
-              </thead>
-              <tbody className="[&_tr:last-child]:border-0">
-                {history.length === 0 ? (
-                    <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No history available.</td></tr>
-                ) : (
-                    history.map((item) => (
-                    <tr key={item.id} className="border-b transition-colors hover:bg-muted/50">
-                        <td className="p-4 align-middle font-medium">
-                        {format(parseISO(item.scheduled_date), "MMM d, yyyy")}
-                        </td>
-                        <td className="p-4 align-middle">
-                            {item.room_id ? (
-                                <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">Room</Badge>
-                            ) : (
-                                <Badge variant="outline" className="text-xs">Property</Badge>
-                            )}
-                        </td>
-                        <td className="p-4 align-middle capitalize">{item.inspection_type.replace('_', ' ')}</td>
-                        <td className="p-4 align-middle">
-                        <Badge 
-                            variant={item.inspection_status === 'passed' ? 'default' : 'destructive'} 
-                            className={item.inspection_status === 'passed' ? "bg-green-100 text-green-700 hover:bg-green-200 border-green-200" : ""}
-                        >
-                            {item.inspection_status === 'passed' ? (
-                            <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Passed</span>
-                            ) : (
-                            <span className="flex items-center gap-1 capitalize"><AlertTriangle className="w-3 h-3" /> {item.inspection_status.replace('_', ' ')}</span>
-                            )}
-                        </Badge>
-                        </td>
-                        <td className="p-4 align-middle text-right">
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-8 w-8 p-0"
-                            onClick={() => { setSelectedReport(item); setIsReportOpen(true); }}
-                        >
-                            <ChevronRight className="h-4 w-4" />
-                        </Button>
-                        </td>
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">History</h3>
+        <Card>
+            <div className="relative w-full overflow-auto">
+                <table className="w-full caption-bottom text-sm text-left">
+                <thead className="[&_tr]:border-b">
+                    <tr className="border-b transition-colors hover:bg-muted/50">
+                    <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Date</th>
+                    <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Scope</th>
+                    <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Type</th>
+                    <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Result</th>
+                    <th className="h-12 px-4 align-middle font-medium text-muted-foreground text-right">Report</th>
                     </tr>
-                    ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
+                    {history.length === 0 ? (
+                        <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No inspection history.</td></tr>
+                    ) : (
+                        history.map((item) => (
+                        <tr key={item.id} className="border-b transition-colors hover:bg-muted/50">
+                            <td className="p-4 align-middle font-medium">
+                            {format(parseISO(item.scheduled_date), "MMM d, yyyy")}
+                            </td>
+                            <td className="p-4 align-middle">
+                                {item.room_id ? (
+                                    <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">Room</Badge>
+                                ) : (
+                                    <Badge variant="outline" className="text-xs">Property</Badge>
+                                )}
+                            </td>
+                            <td className="p-4 align-middle capitalize">{item.inspection_type?.replace('_', ' ')}</td>
+                            <td className="p-4 align-middle">
+                            <Badge 
+                                variant={item.inspection_status === 'passed' ? 'default' : 'destructive'} 
+                                className={item.inspection_status === 'passed' ? "bg-green-100 text-green-700 hover:bg-green-200 border-green-200" : ""}
+                            >
+                                {item.inspection_status === 'passed' ? (
+                                <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Passed</span>
+                                ) : (
+                                <span className="flex items-center gap-1 capitalize"><AlertTriangle className="w-3 h-3" /> {item.inspection_status?.replace('_', ' ')}</span>
+                                )}
+                            </Badge>
+                            </td>
+                            <td className="p-4 align-middle text-right">
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="h-8 w-8 p-0"
+                                onClick={() => { setSelectedReport(item); setIsReportOpen(true); }}
+                            >
+                                <ChevronRight className="h-4 w-4" />
+                            </Button>
+                            </td>
+                        </tr>
+                        ))
+                    )}
+                </tbody>
+                </table>
+            </div>
+        </Card>
+      </div>
 
-      {/* REPORT VIEW MODAL (Read Only) */}
+      {/* REPORT VIEW MODAL */}
       <Dialog open={isReportOpen} onOpenChange={setIsReportOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
@@ -275,7 +264,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
             </DialogHeader>
             
             <div className="space-y-6 py-4">
-                {/* 1. Issues Banner */}
+                {/* Issues Banner */}
                 {selectedReport?.issues_found && selectedReport.issues_found.length > 0 ? (
                     <div className="bg-red-50 p-4 rounded-lg border border-red-100">
                         <h4 className="font-semibold text-red-800 flex items-center gap-2 mb-2">
@@ -300,7 +289,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                     </div>
                 )}
 
-                {/* 2. Checklist (Read Only) */}
+                {/* Checklist */}
                 {selectedReport?.checklist && (
                     <div className="space-y-3">
                         <h4 className="font-semibold flex items-center gap-2"><ListChecks className="h-4 w-4"/> Checklist</h4>
@@ -317,7 +306,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                     </div>
                 )}
 
-                {/* 3. Photos */}
+                {/* Photos */}
                 {selectedReport?.photos && selectedReport.photos.length > 0 && (
                     <div className="space-y-3">
                         <h4 className="font-semibold">Attached Evidence</h4>

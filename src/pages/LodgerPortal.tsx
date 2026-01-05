@@ -9,12 +9,9 @@ import {
   DialogHeader, 
   DialogTitle, 
   DialogFooter, 
-  DialogTrigger
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -28,7 +25,8 @@ import logo from "@/assets/logo.png";
 import LodgerOverview from "./lodger/LodgerOverview";
 import LodgerInspections from "./lodger/LodgerInspections"; 
 import LodgerMessages from "./lodger/LodgerMessages"; 
-import LodgerDocuments from "./lodger/LodgerDocuments"; // ✅ IMPORTED
+import LodgerDocuments from "./lodger/LodgerDocuments"; 
+import LodgerMaintenance from "./lodger/LodgerMaintenance"; // ✅ IMPORTED
 
 // --- INTERFACES ---
 interface ExtraCharge { id: string; reason: string; amount: number; due_date: string; created_at: string; charge_status: string; description?: string; }
@@ -57,7 +55,6 @@ const LodgerPortal = () => {
   
   // Lists
   const [charges, setCharges] = useState<ExtraCharge[]>([]);
-  const [maintenanceHistory, setMaintenanceHistory] = useState<MaintenanceRequest[]>([]);
   const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
@@ -74,10 +71,7 @@ const LodgerPortal = () => {
 
   // UI State
   const [paymentAmount, setPaymentAmount] = useState("750");
-  const [maintenanceIssue, setMaintenanceIssue] = useState("");
-  const [maintenanceCategory, setMaintenanceCategory] = useState("");
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
-  const [isMaintenanceDialogOpen, setIsMaintenanceDialogOpen] = useState(false);
 
   // --- DATA FETCHING ---
   useEffect(() => {
@@ -98,13 +92,12 @@ const LodgerPortal = () => {
                               rawTenancies.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
 
         if (activeTenancy && isMounted) {
-          const [propRes, roomRes, rotationRes, councilRes, chargesRes, maintRes, payRes, notifRes] = await Promise.all([
+          const [propRes, roomRes, rotationRes, councilRes, chargesRes, payRes, notifRes] = await Promise.all([
             supabase.from('properties').select('*').eq('id', activeTenancy.property_id).single(),
             supabase.from('rooms').select('*').eq('id', activeTenancy.room_id).single(),
             supabase.from('in_house_rotation_state').select('*').eq('property_id', activeTenancy.property_id).single(),
             supabase.from('bin_schedules').select('*').eq('property_id', activeTenancy.property_id),
             supabase.from('extra_charges').select('*').eq('lodger_id', profile.id).order('created_at', { ascending: false }),
-            supabase.from('maintenance_requests').select('*').eq('lodger_id', profile.id).order('created_at', { ascending: false }),
             supabase.from('payments').select('*').eq('lodger_id', profile.id).order('payment_date', { ascending: false }),
             supabase.from('notifications')
                 .select('*')
@@ -158,7 +151,6 @@ const LodgerPortal = () => {
           setCouncilBin(nextCouncil || null);
 
           setCharges(chargesRes.data || []);
-          setMaintenanceHistory(maintRes.data || []);
           setPaymentHistory(payRes.data || []);
           setNotifications(notifRes.data || []);
         }
@@ -198,22 +190,6 @@ const LodgerPortal = () => {
     } catch (error: any) {
       toast.error("Error: " + error.message);
     }
-  };
-
-  const handleMaintenanceSubmit = async () => {
-    if (!maintenanceIssue || !maintenanceCategory) return toast.error("Fill all fields");
-    try {
-      await supabase.from('maintenance_requests').insert({
-        lodger_id: lodgerProfile.id,
-        property_id: tenancy.property_id,
-        title: maintenanceCategory,
-        description: maintenanceIssue,
-        status: 'pending',
-        priority: 'medium'
-      });
-      toast.success("Submitted");
-      setIsMaintenanceDialogOpen(false);
-    } catch (e: any) { toast.error(e.message); }
   };
 
   const handlePayCharge = async (chargeId: string, amount: number) => {
@@ -307,6 +283,7 @@ const LodgerPortal = () => {
                 />
             )}
             
+            {/* === PAYMENTS SECTION (Inline) === */}
             {currentTab === "payments" && (
                 <div className="space-y-8 max-w-[1600px]">
                     <div className="flex justify-between items-center">
@@ -314,6 +291,7 @@ const LodgerPortal = () => {
                         <Button onClick={() => setIsPaymentDialogOpen(true)}><CreditCard className="mr-2 h-4 w-4"/> Make Rent Payment</Button>
                     </div>
 
+                    {/* Outstanding Charges */}
                     {charges.filter(c => c.charge_status === 'pending').length > 0 && (
                         <div className="space-y-4">
                             <h3 className="text-lg font-semibold flex items-center gap-2 text-red-700">
@@ -351,6 +329,7 @@ const LodgerPortal = () => {
                         </div>
                     )}
 
+                    {/* Payment History */}
                     <div className="space-y-4">
                         <h3 className="text-lg font-semibold">Payment History</h3>
                         <Card>
@@ -375,32 +354,13 @@ const LodgerPortal = () => {
                 </div>
             )}
 
-            {currentTab === "maintenance" && (
-                <div className="space-y-6 max-w-[1600px]">
-                    <div className="flex justify-between"><h2 className="text-2xl font-bold">Maintenance</h2><Dialog open={isMaintenanceDialogOpen} onOpenChange={setIsMaintenanceDialogOpen}><DialogTrigger asChild><Button><Wrench className="mr-2 h-4 w-4"/> Report Issue</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Report Issue</DialogTitle></DialogHeader><div className="space-y-4"><div><Label>Category</Label><Select value={maintenanceCategory} onValueChange={setMaintenanceCategory}><SelectTrigger><SelectValue placeholder="Select..."/></SelectTrigger><SelectContent><SelectItem value="plumbing">Plumbing</SelectItem><SelectItem value="electrical">Electrical</SelectItem><SelectItem value="other">Other</SelectItem></SelectContent></Select></div><div><Label>Description</Label><Textarea value={maintenanceIssue} onChange={e=>setMaintenanceIssue(e.target.value)}/></div></div><DialogFooter><Button onClick={handleMaintenanceSubmit}>Submit</Button></DialogFooter></DialogContent></Dialog></div>
-                    <Card>
-                        <div className="relative w-full overflow-auto">
-                            <table className="w-full caption-bottom text-sm">
-                                <thead className="[&_tr]:border-b">
-                                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Issue</th>
-                                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Date</th>
-                                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="[&_tr:last-child]:border-0">
-                                    {maintenanceHistory.length === 0 ? <tr><td colSpan={3} className="p-8 text-center text-muted-foreground">No requests found.</td></tr> :
-                                    maintenanceHistory.map(req => (<tr key={req.id} className="border-b transition-colors hover:bg-muted/50"><td className="p-4 align-middle">{req.title}</td><td className="p-4 align-middle">{format(parseISO(req.created_at), 'PP')}</td><td className="p-4 align-middle"><Badge>{req.status}</Badge></td></tr>))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </Card>
-                </div>
-            )}
+            {/* ✅ MAINTENANCE TAB (Using New Component) */}
+            {currentTab === "maintenance" && <LodgerMaintenance />}
 
+            {/* MESSAGES TAB */}
             {currentTab === "messages" && <LodgerMessages />}
 
-            {/* ✅ DOCUMENTS TAB */}
+            {/* DOCUMENTS TAB */}
             {currentTab === "documents" && (
                 tenancy ? <LodgerDocuments tenancyId={tenancy.id} /> : 
                 <div className="flex flex-col items-center justify-center h-[50vh] text-center text-muted-foreground">
@@ -411,12 +371,24 @@ const LodgerPortal = () => {
           </main>
         </div>
         
-        <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}><DialogContent><DialogHeader><DialogTitle>Make Payment</DialogTitle></DialogHeader><div className="py-4"><Label>Amount</Label><Input type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} /></div><DialogFooter><Button onClick={handlePaymentMock}>Confirm</Button></DialogFooter></DialogContent></Dialog>
+        {/* Payment Dialog */}
+        <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+            <DialogContent>
+                <DialogHeader>
+                    <DialogTitle>Make Payment</DialogTitle>
+                </DialogHeader>
+                <div className="py-4">
+                    <Label>Amount</Label>
+                    <Input type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} />
+                </div>
+                <DialogFooter>
+                    <Button onClick={handlePaymentMock}>Confirm</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
       </div>
     </>
   );
 };
 
-export default LodgerPortal; 
-
-/// The code above is the complete LodgerPortal.tsx file with the LodgerDocuments component properly imported and integrated.
+export default LodgerPortal;

@@ -1,5 +1,8 @@
-import { useState, useEffect } from "react";
-import { Bell, User, LogOut, Wrench, Calendar, Send } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { 
+  Bell, User, LogOut, Wrench, Calendar, Send, 
+  Loader2, ImageIcon, X, AlertTriangle, Clock, FileText 
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useAuth } from "@/contexts/useAuth";
@@ -8,144 +11,175 @@ import logo from "@/assets/logo.png";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { BottomNav } from "@/components/mobile/BottomNav";
-import { LodgerProfile } from "@/contexts/AuthContextTypes";
 import { supabase } from "@/lib/supabaseClient";
+import { format, parseISO } from "date-fns";
+
+// === TYPES ===
+interface Complaint {
+  id: string;
+  subject: string;
+  description: string;
+  complaint_category: string;
+  complaint_priority: string;
+  complaint_status: string;
+  created_at: string;
+  attachments: string[] | null;
+  lodger_id: string;
+}
 
 const LodgerMaintenance = () => {
   const { logout, user } = useAuth();
-  const [maintenanceIssue, setMaintenanceIssue] = useState("");
-  const [maintenanceCategory, setMaintenanceCategory] = useState("");
-  const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
-  const [tenancy, setTenancy] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  
+  // Data State
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [activeTenancy, setActiveTenancy] = useState<any>(null);
 
-  const lodgerProfile = user?.profile as LodgerProfile;
+  // Form State
+  const [subject, setSubject] = useState("");
+  const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState("medium");
+  
+  // File Upload State
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // --- 1. FETCH DATA ---
   useEffect(() => {
-    const fetchData = async () => {
-      if (!lodgerProfile?.id) return;
+    if (!user) return;
 
+    const fetchData = async () => {
       try {
         setLoading(true);
 
-        // Fetch active tenancy (needed for submitting requests)
-        const { data: tenancyData, error: tenancyError } = await supabase
+        // A. Get Profile & Tenancy
+        const { data: profile } = await supabase.from('lodger_profiles').select('id').eq('user_id', user.id).single();
+        if (!profile) return;
+
+        const { data: tenancy } = await supabase
           .from('tenancies')
-          .select(`
-            *,
-            room:rooms(*),
-            property:properties(*)
-          `)
-          .eq('lodger_id', lodgerProfile.id)
+          .select('id, property_id, room_id, properties(property_name), rooms(room_number)')
+          .eq('lodger_id', profile.id)
           .eq('tenancy_status', 'active')
           .maybeSingle();
-        if (tenancyError) console.error("Error fetching tenancy:", tenancyError);
-        else setTenancy(tenancyData);
-
-        // Fetch maintenance requests
-        const { data: requestsData, error: requestsError } = await supabase
-          .from('maintenance_requests')
-          .select('*')
-          .eq('lodger_id', lodgerProfile.id)
-          .order('created_at', { ascending: false });
-        if (requestsError) {
-          console.error("Error fetching maintenance requests:", requestsError);
-          toast({
-            title: "Error Loading Data",
-            description: "Could not load maintenance requests. Please try again.",
-            variant: "destructive",
-          });
-        } else {
-          setMaintenanceRequests(requestsData || []);
+        
+        if (tenancy) {
+            setActiveTenancy({ ...tenancy, lodger_id: profile.id });
         }
-      } catch (error) {
-        console.error("Error fetching data:", error);
+
+        // B. Fetch Complaints History
+        const { data: history, error } = await supabase
+          .from('complaints')
+          .select('*')
+          .eq('lodger_id', profile.id)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        setComplaints(history || []);
+
+      } catch (e) {
+        console.error("Data load error:", e);
+        toast.error("Failed to load records.");
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [lodgerProfile?.id]);
+  }, [user]);
 
-  const handleMaintenanceSubmit = async () => {
-    if (!maintenanceIssue || !maintenanceCategory) {
-      toast({
-        title: "Missing Information",
-        description: "Please fill in all required fields.",
-        variant: "destructive",
-      });
-      return;
+  // --- 2. FILE ACTIONS ---
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      if (selectedFiles.length + newFiles.length > 3) {
+        toast.error("Maximum 3 files allowed.");
+        return;
+      }
+      setSelectedFiles(prev => [...prev, ...newFiles]);
     }
+  };
 
-    if (!lodgerProfile?.id || !tenancy) {
-      toast({
-        title: "Error",
-        description: "Unable to submit request. Please ensure you have an active tenancy.",
-        variant: "destructive",
-      });
-      return;
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // --- 3. SUBMIT HANDLER ---
+  const handleSubmit = async () => {
+    if (!subject || !category || !description) {
+      return toast.error("Please fill in all required fields.");
     }
+    if (!activeTenancy) return toast.error("No active tenancy found.");
+
+    setSubmitting(true);
+    const attachmentUrls: string[] = [];
 
     try {
-      setSubmitting(true);
-      const { error } = await supabase
-        .from('maintenance_requests')
-        .insert({
-          lodger_id: lodgerProfile.id,
-          property_id: tenancy.property_id,
-          room_id: tenancy.room_id,
-          category: maintenanceCategory,
-          description: maintenanceIssue,
-          priority: 'medium',
-          request_status: 'pending'
-        });
+      // A. Upload Images
+      if (selectedFiles.length > 0) {
+        for (const file of selectedFiles) {
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${activeTenancy.lodger_id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+          
+          const { error: uploadError } = await supabase.storage
+            .from('complaint-evidence')
+            .upload(fileName, file);
+
+          if (uploadError) throw uploadError;
+
+          const { data: urlData } = supabase.storage
+            .from('complaint-evidence')
+            .getPublicUrl(fileName);
+            
+          attachmentUrls.push(urlData.publicUrl);
+        }
+      }
+
+      // B. Insert Record
+      const { data, error } = await supabase.from('complaints').insert({
+        lodger_id: activeTenancy.lodger_id,
+        tenancy_id: activeTenancy.id,
+        property_id: activeTenancy.property_id,
+        room_id: activeTenancy.room_id,
+        subject: subject,
+        description: description,
+        complaint_category: category,
+        priority: priority,
+        complaint_status: 'pending',
+        attachments: attachmentUrls.length > 0 ? attachmentUrls : null,
+        created_at: new Date().toISOString()
+      }).select().single();
 
       if (error) throw error;
 
-      toast({
-        title: "Request Submitted",
-        description: "Your maintenance request has been submitted successfully.",
-      });
+      toast.success("Request submitted successfully.");
+      setComplaints([data, ...complaints]);
+      
+      // Reset Form
+      setSubject("");
+      setCategory("");
+      setDescription("");
+      setPriority("medium");
+      setSelectedFiles([]);
 
-      // Refresh the list
-      const { data: requestsData } = await supabase
-        .from('maintenance_requests')
-        .select('*')
-        .eq('lodger_id', lodgerProfile.id)
-        .order('created_at', { ascending: false });
-      if (requestsData) setMaintenanceRequests(requestsData);
-
-      setMaintenanceIssue("");
-      setMaintenanceCategory("");
-    } catch (error) {
-      console.error("Error submitting maintenance request:", error);
-      toast({
-        title: "Submission Failed",
-        description: "Failed to submit maintenance request. Please try again.",
-        variant: "destructive",
-      });
+    } catch (e: any) {
+      console.error(e);
+      toast.error("Submission failed: " + e.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getPriorityBadge = (priority: string) => {
-    const priorityColors = {
-      high: "border-red-600 text-red-600",
-      medium: "border-yellow-600 text-yellow-600",
-      low: "border-green-600 text-green-600"
-    };
-    return priorityColors[priority as keyof typeof priorityColors] || "";
-  };
-
+  // --- HELPERS ---
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case 'completed':
+      case 'resolved':
         return { variant: "outline" as const, className: "border-green-600 text-green-600" };
       case 'in_progress':
         return { variant: "default" as const, className: "bg-blue-600" };
@@ -154,88 +188,90 @@ const LodgerMaintenance = () => {
     }
   };
 
+  const getPriorityBadge = (p: string) => {
+    switch(p) {
+        case 'urgent': return "border-red-600 text-red-600 bg-red-50";
+        case 'high': return "border-orange-600 text-orange-600 bg-orange-50";
+        default: return "border-gray-400 text-gray-600";
+    }
+  };
+
   return (
     <>
       <SEO 
-        title="Maintenance - Lodger Portal - Domus Dwell Manage"
-        description="Submit and track maintenance requests"
+        title="Maintenance & Complaints - Domus"
+        description="Submit and track requests"
       />
 
       <div className="min-h-screen bg-background">
         <div className="container mx-auto px-4 py-6 pb-24 md:pb-6">
+          
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img src={logo} alt="Logo" className="h-10 w-10 rounded-lg" />
               <div>
-                <h1 className="text-2xl font-bold text-foreground">Maintenance</h1>
-                <p className="text-sm text-muted-foreground">Submit and track requests</p>
+                <h1 className="text-2xl font-bold text-foreground">Resolution Center</h1>
+                <p className="text-sm text-muted-foreground">Report maintenance issues or complaints</p>
               </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="ghost" size="icon">
-                <Bell className="h-5 w-5" />
-              </Button>
-              <Button variant="ghost" size="icon" onClick={logout}>
-                <LogOut className="h-5 w-5" />
-              </Button>
+              <Button variant="ghost" size="icon"><Bell className="h-5 w-5" /></Button>
+              <Button variant="ghost" size="icon" onClick={logout}><LogOut className="h-5 w-5" /></Button>
             </div>
           </div>
 
-          {/* Maintenance Sections */}
+          {/* Main Grid */}
           <div className="grid lg:grid-cols-2 gap-6">
-            <Card className="border-border">
+            
+            {/* LEFT: HISTORY LIST */}
+            <Card className="border-border h-fit">
               <CardHeader>
-                <CardTitle>Active Requests</CardTitle>
-                <CardDescription>Track your maintenance requests</CardDescription>
+                <CardTitle>History</CardTitle>
+                <CardDescription>Track status of your requests</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <p className="text-muted-foreground">Loading maintenance requests...</p>
-                ) : maintenanceRequests.length === 0 ? (
-                  <p className="text-muted-foreground">No maintenance requests found.</p>
+                  <div className="flex justify-center p-4"><Loader2 className="animate-spin h-6 w-6 text-primary"/></div>
+                ) : complaints.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">No requests found.</p>
                 ) : (
-                  <div className="space-y-4">
-                    {maintenanceRequests.map((request) => {
-                      const statusBadge = getStatusBadge(request.request_status);
+                  <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+                    {complaints.map((item) => {
+                      const statusBadge = getStatusBadge(item.complaint_status);
                       return (
-                        <div
-                          key={request.id}
-                          className="p-4 border border-border rounded-lg"
-                        >
+                        <div key={item.id} className="p-4 border border-border rounded-lg hover:bg-muted/5 transition-colors">
                           <div className="flex items-start justify-between mb-2">
-                            <p className="font-medium">{request.description || "No description"}</p>
-                            <Badge
-                              variant={statusBadge.variant}
-                              className={statusBadge.className}
-                            >
-                              {request.request_status?.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()) || "Pending"}
+                            <div>
+                                <p className="font-medium text-sm">{item.subject}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">{format(parseISO(item.created_at), 'd MMM yyyy')}</p>
+                            </div>
+                            <Badge variant={statusBadge.variant} className={statusBadge.className}>
+                              {item.complaint_status.replace('_', ' ')}
                             </Badge>
                           </div>
-                          <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              {request.reported_date 
-                                ? new Date(request.reported_date).toLocaleDateString('en-GB')
-                                : "N/A"}
+                          
+                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{item.description}</p>
+                          
+                          {/* Attachments Preview */}
+                          {item.attachments && item.attachments.length > 0 && (
+                            <div className="flex gap-2 mb-3">
+                                {item.attachments.map((url, i) => (
+                                    <a key={i} href={url} target="_blank" rel="noreferrer" className="block h-10 w-10 shrink-0 border rounded overflow-hidden hover:opacity-80">
+                                        <img src={url} className="h-full w-full object-cover" />
+                                    </a>
+                                ))}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-2 mt-2">
+                            <Badge variant="outline" className={getPriorityBadge(item.complaint_priority)}>
+                                {item.complaint_priority}
+                            </Badge>
+                            <span className="text-[10px] text-muted-foreground bg-secondary px-2 py-0.5 rounded capitalize">
+                                {item.complaint_category}
                             </span>
-                            <Badge
-                              variant="outline"
-                              className={getPriorityBadge(request.priority || 'medium')}
-                            >
-                              {request.priority?.charAt(0).toUpperCase() + request.priority?.slice(1) || "Medium"} Priority
-                            </Badge>
                           </div>
-                          {request.property?.property_name && (
-                            <p className="text-xs text-muted-foreground mt-2">
-                              {request.property.property_name} - Room {request.room?.room_number || "N/A"}
-                            </p>
-                          )}
-                          {request.assigned_to && (
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Assigned to: {request.assigned_to}
-                            </p>
-                          )}
                         </div>
                       );
                     })}
@@ -244,62 +280,123 @@ const LodgerMaintenance = () => {
               </CardContent>
             </Card>
 
-            <Card className="border-border">
+            {/* RIGHT: NEW REQUEST FORM */}
+            <Card className="border-border h-fit">
               <CardHeader>
-                <CardTitle>Report New Issue</CardTitle>
-                <CardDescription>Submit a maintenance request</CardDescription>
+                <CardTitle>Log New Issue</CardTitle>
+                <CardDescription>Submit details and evidence</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div>
-                    <Label>Category</Label>
-                    <Select value={maintenanceCategory} onValueChange={setMaintenanceCategory}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="plumbing">Plumbing</SelectItem>
-                        <SelectItem value="electrical">Electrical</SelectItem>
-                        <SelectItem value="heating">Heating/Cooling</SelectItem>
-                        <SelectItem value="appliance">Appliance</SelectItem>
-                        <SelectItem value="structural">Structural</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  {/* Subject & Priority */}
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="space-y-2">
+                        <Label>Subject</Label>
+                        <Input 
+                            placeholder="Brief title (e.g., Leaking Tap)" 
+                            value={subject} 
+                            onChange={e => setSubject(e.target.value)} 
+                        />
+                    </div>
                   </div>
-                  <div>
-                    <Label>Describe the Issue</Label>
+
+                  {/* Category & Priority Row */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Category</Label>
+                      <Select value={category} onValueChange={setCategory}>
+                        <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="plumbing">Plumbing</SelectItem>
+                          <SelectItem value="electrical">Electrical</SelectItem>
+                          <SelectItem value="appliance">Appliance</SelectItem>
+                          <SelectItem value="noise">Noise / Disturbance</SelectItem>
+                          <SelectItem value="security">Security</SelectItem>
+                          <SelectItem value="cleanliness">Cleanliness</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Priority</Label>
+                      <Select value={priority} onValueChange={setPriority}>
+                        <SelectTrigger><SelectValue placeholder="Priority" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="urgent">Urgent</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Description */}
+                  <div className="space-y-2">
+                    <Label>Description</Label>
                     <Textarea
-                      placeholder="Please provide details..."
-                      value={maintenanceIssue}
-                      onChange={(e) => setMaintenanceIssue(e.target.value)}
-                      className="min-h-[150px]"
+                      placeholder="Please describe the issue in detail..."
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="min-h-[120px]"
                     />
                   </div>
+
+                  {/* Image Upload */}
+                  <div className="space-y-3 pt-2">
+                    <Label>Evidence (Photos)</Label>
+                    <div className="flex flex-wrap gap-3">
+                      {selectedFiles.map((file, idx) => (
+                        <div key={idx} className="relative h-20 w-20 border rounded-md overflow-hidden group">
+                          <img src={URL.createObjectURL(file)} alt="preview" className="h-full w-full object-cover" />
+                          <button 
+                            onClick={() => removeFile(idx)}
+                            className="absolute top-0 right-0 bg-red-500 text-white p-0.5 rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                      
+                      <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="h-20 w-20 border-2 border-dashed rounded-md flex flex-col items-center justify-center cursor-pointer hover:bg-muted/50 transition-colors text-muted-foreground"
+                      >
+                        <ImageIcon className="h-5 w-5 mb-1" />
+                        <span className="text-[10px]">Add Photo</span>
+                      </div>
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        multiple 
+                        accept="image/*"
+                        onChange={handleFileSelect}
+                      />
+                    </div>
+                  </div>
+
                   <Button 
-                    className="w-full" 
-                    onClick={handleMaintenanceSubmit}
-                    disabled={submitting || !tenancy}
+                    className="w-full mt-2" 
+                    onClick={handleSubmit}
+                    disabled={submitting || !activeTenancy}
                   >
-                    <Send className="h-4 w-4 mr-2" />
-                    {submitting ? "Submitting..." : "Submit Request"}
+                    {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2"/> : <Send className="h-4 w-4 mr-2" />}
+                    Submit Request
                   </Button>
-                  {!tenancy && !loading && (
-                    <p className="text-xs text-destructive">
-                      You need an active tenancy to submit maintenance requests.
-                    </p>
+                  
+                  {!activeTenancy && !loading && (
+                    <p className="text-xs text-destructive text-center">Active tenancy required to submit.</p>
                   )}
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Bottom padding for mobile nav */}
           <div className="h-20 md:h-0"></div>
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation */}
       <BottomNav role="lodger" />
     </>
   );
