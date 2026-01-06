@@ -1,29 +1,36 @@
 import { useEffect, useState, useCallback } from "react";
-import { Trash2, Calendar, CheckCircle, AlertTriangle, Building2, Loader2, User } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { 
+  Trash2, Calendar, CheckCircle, AlertTriangle, Building2, Loader2, 
+  User, ShieldCheck, XCircle, Gavel, Search, MoreHorizontal, Clock 
+} from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/useAuth";
-import { format, isSameDay, parseISO, startOfWeek } from "date-fns";
+import { format, isSameDay, parseISO, startOfWeek, isPast, addDays } from "date-fns";
 
-// === 1. RAW DATA INTERFACES (Matches Database) ===
-
-interface StaffProfile { id: string; }
-interface RotationState { id: string; property_id: string; current_room_id: string; next_rotation_date: string; }
-interface Property { id: string; property_name: string; }
-interface Room { id: string; room_number: string; }
-interface BinSchedule { id: string; property_id: string; bin_type: string; next_collection_date: string; }
-interface Log { property_id: string; room_id?: string; bin_duty_status: string; created_at: string; notes?: string; verified_by?: string; }
-interface StaffUser { id: string; full_name: string; }
-
-// === 2. UI INTERFACES ===
-
+// === 1. INTERFACES ===
 interface InHouseDuty {
   id: string; 
+  log_id?: string; 
   property_name: string;
-  current_room_number: string;
-  next_rotation_date: string;
-  status: 'pending' | 'completed' | 'missed';
+  property_id: string; 
+  room_number: string;
+  lodger_name?: string;
+  lodger_id?: string; 
+  tenancy_id?: string; 
+  rotation_date: string;
+  status: 'pending' | 'completed' | 'missed' | 'verified';
+  is_verified: boolean;
+  notes?: string;
 }
 
 interface CouncilDuty {
@@ -32,279 +39,367 @@ interface CouncilDuty {
   bin_type: string;
   next_collection_date: string;
   status: 'pending' | 'completed';
-  completed_by_name?: string;
 }
-
-// === COMPONENT ===
 
 const StaffBinDuties = () => {
   const { user } = useAuth();
   
   const [inHouseDuties, setInHouseDuties] = useState<InHouseDuty[]>([]);
   const [councilDuties, setCouncilDuties] = useState<CouncilDuty[]>([]);
+  const [historyLog, setHistoryLog] = useState<InHouseDuty[]>([]);
   const [loading, setLoading] = useState(true);
+  const [staffProfileId, setStaffProfileId] = useState<string | null>(null);
+
+  // Modals
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [fineModalOpen, setFineModalOpen] = useState(false);
+  const [rescheduleModalOpen, setRescheduleModalOpen] = useState(false);
+
+  const [selectedTask, setSelectedTask] = useState<InHouseDuty | null>(null);
+  const [selectedCouncilTask, setSelectedCouncilTask] = useState<CouncilDuty | null>(null);
+  
+  // Inputs
+  const [staffNotes, setStaffNotes] = useState("");
+  const [fineAmount, setFineAmount] = useState("15.00");
+  const [newDate, setNewDate] = useState(""); 
+  const [processing, setProcessing] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
 
   // --- DATA FETCHING ---
-
   const fetchData = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
 
     try {
-      // 1. Get Staff ID
       const { data: staffProfile } = await supabase.from('staff_profiles').select('id').eq('user_id', user.id).single();
       if (!staffProfile) throw new Error("Staff profile not found");
+      setStaffProfileId(staffProfile.id);
       const staffId = staffProfile.id;
 
-      // 2. GET RELEVANT PROPERTY IDs
-      // Source A: Properties assigned to this staff
       const { data: assignments } = await supabase.from('staff_property_assignments').select('property_id').eq('staff_id', staffId);
-      const assignedIds = assignments?.map(a => a.property_id) || [];
-
-      // Source B: Properties where this staff is assigned to a Council Bin schedule
       const { data: councilScheds } = await supabase.from('bin_schedules').select('property_id').eq('assigned_staff_id', staffId);
-      const councilIds = councilScheds?.map(c => c.property_id) || [];
-
-      // Combine unique IDs
-      const propIds = Array.from(new Set([...assignedIds, ...councilIds]));
+      
+      const propIds = Array.from(new Set([
+        ...(assignments?.map(a => a.property_id) || []),
+        ...(councilScheds?.map(c => c.property_id) || [])
+      ]));
 
       if (propIds.length === 0) {
         setLoading(false);
         return;
       }
 
-      // 3. FETCH ALL DATA PARALLEL (No complex Joins)
       const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }).toISOString();
 
-      const [
-        propsRes,
-        roomsRes,
-        rotationsRes,
-        schedulesRes,
-        logsRes,
-        staffNamesRes
-      ] = await Promise.all([
-        // Get Names
+      const [propsRes, roomsRes, rotationsRes, schedulesRes, logsRes] = await Promise.all([
         supabase.from('properties').select('id, property_name').in('id', propIds),
-        // Get Room Numbers (We fetch ALL rooms for these properties to be safe)
         supabase.from('rooms').select('id, room_number').in('property_id', propIds),
-        // Get Rotation States
         supabase.from('in_house_rotation_state').select('*').in('property_id', propIds),
-        // Get Council Schedules (Filtered by staff)
         supabase.from('bin_schedules').select('*').eq('assigned_staff_id', staffId),
-        // Get Logs
-        supabase.from('bin_rotations').select('*').in('property_id', propIds).gte('created_at', weekStart),
-        // Get Staff Names
-        supabase.from('staff_profiles').select('id, full_name')
+        supabase.from('bin_rotations')
+          .select('*, lodger_profiles(full_name), properties(property_name), rooms(room_number)')
+          .in('property_id', propIds)
+          .order('created_at', { ascending: false })
+          .limit(100) 
       ]);
 
-      // Extract Data
-      const properties = (propsRes.data as Property[]) || [];
-      const rooms = (roomsRes.data as Room[]) || [];
-      const rotations = (rotationsRes.data as RotationState[]) || [];
-      const schedules = (schedulesRes.data as BinSchedule[]) || [];
-      const logs = (logsRes.data as Log[]) || [];
-      const staffNames = (staffNamesRes.data as StaffUser[]) || [];
+      const properties = (propsRes.data as any[]) || [];
+      const rooms = (roomsRes.data as any[]) || [];
+      const rotations = (rotationsRes.data as any[]) || [];
+      const schedules = (schedulesRes.data as any[]) || [];
+      const logs = (logsRes.data as any[]) || [];
 
-      // --- MERGE 1: In-House Rotation ---
-      const processedInHouse: InHouseDuty[] = rotations.map(rot => {
-        // Manually find related data in JS arrays
+      // --- IN HOUSE LOGIC ---
+      const activeList: InHouseDuty[] = rotations.map(rot => {
         const prop = properties.find(p => p.id === rot.property_id);
         const room = rooms.find(r => r.id === rot.current_room_id);
-        
-        const log = logs.find(l => 
-          l.property_id === rot.property_id && 
-          l.room_id === rot.current_room_id && // Log must match the specific room
-          l.bin_duty_status !== 'pending'
-        );
+        const log = logs.find(l => l.property_id === rot.property_id && l.room_id === rot.current_room_id && l.created_at >= weekStart);
 
         return {
           id: rot.id,
-          property_name: prop?.property_name || "Unknown Property",
-          current_room_number: room?.room_number || "Unassigned", // Safe fallback
-          next_rotation_date: rot.next_rotation_date,
-          status: (log?.bin_duty_status as any) || 'pending'
+          log_id: log?.id,
+          property_name: prop?.property_name || "Unknown",
+          property_id: rot.property_id,
+          room_number: room?.room_number || "?",
+          lodger_name: log?.lodger_profiles?.full_name || "Assigned Lodger",
+          lodger_id: log?.lodger_id,
+          tenancy_id: log?.tenancy_id,
+          rotation_date: rot.next_rotation_date,
+          status: (log?.bin_duty_status as any) || 'pending',
+          is_verified: log?.is_verified || false,
+          notes: log?.notes
         };
       });
 
-      setInHouseDuties(processedInHouse);
+      const historyList: InHouseDuty[] = logs.map(l => ({
+        id: l.id,
+        log_id: l.id,
+        property_name: l.properties?.property_name,
+        property_id: l.property_id,
+        room_number: l.rooms?.room_number,
+        lodger_name: l.lodger_profiles?.full_name,
+        lodger_id: l.lodger_id,
+        tenancy_id: l.tenancy_id,
+        rotation_date: l.rotation_date || l.created_at,
+        status: l.bin_duty_status,
+        is_verified: l.is_verified,
+        notes: l.notes
+      }));
 
-      // --- MERGE 2: Council Schedules ---
-      const processedCouncil: CouncilDuty[] = schedules.map(sched => {
-        const prop = properties.find(p => p.id === sched.property_id);
-        
-        // Find matching log (Same Day + Tag)
-        const log = logs.find(l => 
-          l.property_id === sched.property_id && 
-          isSameDay(parseISO(l.created_at), parseISO(sched.next_collection_date)) &&
-          l.notes?.includes("Council")
-        );
+      setInHouseDuties(activeList);
+      setHistoryLog(historyList);
 
-        const staffName = log ? staffNames.find(s => s.id === log.verified_by)?.full_name : undefined;
-
-        return {
-          id: sched.id,
-          property_name: prop?.property_name || "Unknown Property",
-          bin_type: sched.bin_type,
-          next_collection_date: sched.next_collection_date,
-          status: log ? 'completed' : 'pending',
-          completed_by_name: staffName
-        };
-      });
-
+      // --- COUNCIL LOGIC ---
+      const processedCouncil: CouncilDuty[] = schedules.map(sched => ({
+        id: sched.id, 
+        property_name: properties.find(p => p.id === sched.property_id)?.property_name || "Unknown",
+        bin_type: sched.bin_type,
+        next_collection_date: sched.next_collection_date,
+        status: 'pending'
+      }));
+      
       setCouncilDuties(processedCouncil.sort((a,b) => new Date(a.next_collection_date).getTime() - new Date(b.next_collection_date).getTime()));
 
     } catch (error) {
       console.error("Fetch Error:", error);
+      toast.error("Failed to load data");
     } finally {
       setLoading(false);
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
+  // --- ACTIONS ---
 
-  // --- HELPERS ---
+  const handleVerify = async () => {
+    if (!selectedTask?.log_id || !staffProfileId) return;
+    setProcessing(true);
+    
+    try {
+      const { error } = await supabase.from('bin_rotations').update({
+        is_verified: true,
+        verified_by: staffProfileId,
+        verified_at: new Date().toISOString(),
+        notes: staffNotes ? `[Staff Verified]: ${staffNotes}` : undefined
+      }).eq('id', selectedTask.log_id);
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "completed": return <Badge className="bg-green-500">Completed</Badge>;
-      case "pending": return <Badge variant="secondary">Pending</Badge>;
-      case "missed": return <Badge variant="destructive">Missed</Badge>;
-      default: return <Badge variant="outline">{status}</Badge>;
+      if (error) throw error;
+      toast.success("Verified successfully");
+      setVerifyModalOpen(false);
+      fetchData();
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally { setProcessing(false); }
+  };
+
+  const handleIssueFine = async () => {
+    if (!selectedTask || !staffProfileId || !selectedTask.lodger_id) {
+        toast.error("Missing lodger information.");
+        return;
+    }
+    setProcessing(true);
+    try {
+      const chargeId = crypto.randomUUID(); 
+      const { error: chargeError } = await supabase.from('extra_charges').insert({
+        id: chargeId,
+        lodger_id: selectedTask.lodger_id,
+        property_id: selectedTask.property_id,
+        tenancy_id: selectedTask.tenancy_id,
+        charge_type: 'bin_duty_missed',
+        amount: parseFloat(fineAmount),
+        reason: `Missed Bin Duty (${format(parseISO(selectedTask.rotation_date), 'PP')}). ${staffNotes || ''}`,
+        charge_status: 'pending',
+        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+      if (chargeError) throw chargeError;
+
+      if (selectedTask.log_id) {
+        const { error: updateError } = await supabase.from('bin_rotations').update({
+          bin_duty_status: 'missed',
+          is_verified: true, 
+          verified_by: staffProfileId,
+          verified_at: new Date().toISOString(),
+          extra_charge_id: chargeId,
+          notes: `[Fine Issued]: ${staffNotes}`
+        }).eq('id', selectedTask.log_id);
+        if (updateError) throw updateError;
+      }
+
+      toast.success(`Lodger fined £${fineAmount}`);
+      setFineModalOpen(false);
+      fetchData();
+    } catch (err: any) {
+      toast.error("Action failed: " + err.message);
+    } finally { setProcessing(false); }
+  };
+
+  const handleReschedule = async () => {
+    if (!selectedCouncilTask || !newDate) return;
+    setProcessing(true);
+    try {
+        const { error } = await supabase
+            .from('bin_schedules')
+            .update({ next_collection_date: new Date(newDate).toISOString() })
+            .eq('id', selectedCouncilTask.id);
+
+        if (error) throw error;
+        toast.success("Collection date updated");
+        setRescheduleModalOpen(false);
+        fetchData();
+    } catch (err: any) {
+        toast.error("Update failed: " + err.message);
+    } finally {
+        setProcessing(false);
     }
   };
 
-  const getRelativeDate = (dateStr: string) => {
-    if (!dateStr) return "N/A";
-    const date = parseISO(dateStr);
-    const today = new Date();
-    if (isSameDay(date, today)) return "Today";
-    return format(date, 'EEE, MMM d');
+  // --- HELPERS ---
+  const getStatusBadge = (status: string, verified: boolean) => {
+    if (status === "completed" && verified) return <Badge className="bg-green-600 gap-1"><ShieldCheck className="w-3 h-3"/> Verified</Badge>;
+    if (status === "completed" && !verified) return <Badge className="bg-orange-500 gap-1">Needs Verify</Badge>;
+    if (status === "missed") return <Badge variant="destructive">Missed / Fined</Badge>;
+    return <Badge variant="secondary">Pending</Badge>;
   };
+
+  const isOverdue = (dateStr: string) => isPast(parseISO(dateStr)) && !isSameDay(parseISO(dateStr), new Date());
 
   if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin" /></div>;
 
-  // Stats Logic
-  const totalDue = inHouseDuties.length + councilDuties.filter(c => getRelativeDate(c.next_collection_date) === "Today").length;
-  const completedCount = inHouseDuties.filter(d => d.status === 'completed').length + councilDuties.filter(c => c.status === 'completed').length;
-  const pendingCount = inHouseDuties.filter(d => d.status === 'pending').length + councilDuties.filter(c => c.status === 'pending').length;
-  const missedCount = inHouseDuties.filter(d => d.status === 'missed').length;
+  // Stats
+  const totalActive = inHouseDuties.length;
+  const completedCount = inHouseDuties.filter(d => (d.status === 'completed' && d.is_verified)).length;
+  const pendingVerifyCount = inHouseDuties.filter(d => d.status === 'completed' && !d.is_verified).length;
+  const missedOverdueCount = inHouseDuties.filter(d => d.status === 'missed' || (d.status === 'pending' && isOverdue(d.rotation_date))).length;
 
   return (
-    <div className="space-y-6">
+    <div className="w-full space-y-6">
       
       {/* Stats Cards */}
-      <div className="grid md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div><p className="text-sm text-muted-foreground mb-1">Total Active Duties</p><p className="text-2xl font-bold">{totalDue}</p></div>
-              <div className="bg-primary/10 p-3 rounded-full"><Trash2 className="h-5 w-5 text-primary" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div><p className="text-sm text-muted-foreground mb-1">Completed</p><p className="text-2xl font-bold">{completedCount}</p></div>
-              <div className="bg-green-500/10 p-3 rounded-full"><CheckCircle className="h-5 w-5 text-green-500" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div><p className="text-sm text-muted-foreground mb-1">Pending</p><p className="text-2xl font-bold">{pendingCount}</p></div>
-              <div className="bg-orange-500/10 p-3 rounded-full"><Calendar className="h-5 w-5 text-orange-500" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div><p className="text-sm text-muted-foreground mb-1">Missed/Issues</p><p className="text-2xl font-bold">{missedCount}</p></div>
-              <div className="bg-destructive/10 p-3 rounded-full"><AlertTriangle className="h-5 w-5 text-destructive" /></div>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
+        <Card><CardContent className="p-6 flex items-center justify-between"><div><p className="text-sm text-muted-foreground mb-1">Total Active</p><p className="text-2xl font-bold">{totalActive}</p></div><div className="bg-primary/10 p-3 rounded-full"><Trash2 className="h-5 w-5 text-primary"/></div></CardContent></Card>
+        <Card><CardContent className="p-6 flex items-center justify-between"><div><p className="text-sm text-muted-foreground mb-1">Completed</p><p className="text-2xl font-bold">{completedCount}</p></div><div className="bg-green-100 p-3 rounded-full"><CheckCircle className="h-5 w-5 text-green-600"/></div></CardContent></Card>
+        <Card className={pendingVerifyCount > 0 ? "border-orange-400 bg-orange-50/50" : ""}><CardContent className="p-6 flex items-center justify-between"><div><p className="text-sm text-muted-foreground mb-1">Pending Verify</p><p className="text-2xl font-bold">{pendingVerifyCount}</p></div><div className="bg-orange-100 p-3 rounded-full"><ShieldCheck className="h-5 w-5 text-orange-600"/></div></CardContent></Card>
+        <Card className={missedOverdueCount > 0 ? "border-red-400 bg-red-50/50" : ""}><CardContent className="p-6 flex items-center justify-between"><div><p className="text-sm text-muted-foreground mb-1">Missed/Overdue</p><p className="text-2xl font-bold">{missedOverdueCount}</p></div><div className="bg-red-100 p-3 rounded-full"><XCircle className="h-5 w-5 text-red-600"/></div></CardContent></Card>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        
-        {/* In-House Rotation List */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5" />
-              In-House Weekly Rotation
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {inHouseDuties.length === 0 ? <p className="text-muted-foreground text-sm">No in-house duties found.</p> :
-             <div className="space-y-4">
-              {inHouseDuties.map((duty) => (
-                <div key={duty.id} className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="font-medium">{duty.property_name}</p>
-                    <p className="text-sm text-muted-foreground">
-                      Current Duty: Room {duty.current_room_number}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Next Rotation: {format(parseISO(duty.next_rotation_date), 'EEE, MMM d')}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {getStatusBadge(duty.status)}
-                  </div>
-                </div>
-              ))}
-            </div>}
-          </CardContent>
-        </Card>
+      <Tabs defaultValue="active" className="w-full">
+        <TabsList className="w-full justify-start">
+          <TabsTrigger value="active">Active Duties</TabsTrigger>
+          <TabsTrigger value="council">Council Schedule</TabsTrigger>
+          <TabsTrigger value="history">Full History Log</TabsTrigger>
+        </TabsList>
 
-        {/* Council Collection List */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Trash2 className="w-5 h-5" />
-              Council Bin Collection
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {councilDuties.length === 0 ? <p className="text-muted-foreground text-sm">No council schedules assigned to you.</p> :
-             <div className="space-y-4">
-              {councilDuties.map((collection) => (
-                <div key={collection.id} className="flex flex-col p-4 border rounded-lg gap-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                        <p className="font-medium">{collection.property_name}</p>
-                        <p className="text-sm text-muted-foreground">{collection.bin_type} Waste</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs font-medium">{getRelativeDate(collection.next_collection_date)}</p>
-                        <p className="text-[10px] text-muted-foreground">Before 7 AM</p>
-                    </div>
+        {/* TAB 1: ACTIVE */}
+        <TabsContent value="active" className="mt-6 w-full">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 w-full">
+            {inHouseDuties.map((duty) => {
+              const overdue = isOverdue(duty.rotation_date) && !duty.is_verified && duty.status !== 'completed';
+              return (
+                <div key={duty.id} className={`p-5 border rounded-lg flex flex-col gap-4 bg-card shadow-sm ${overdue ? 'border-red-300 bg-red-50/10' : ''}`}>
+                  <div className="flex justify-between items-start">
+                    <div><p className="font-semibold text-lg">{duty.property_name}</p><div className="flex items-center gap-2 text-sm text-muted-foreground mt-1"><User className="w-3 h-3"/>{duty.lodger_name || `Room ${duty.room_number}`}</div></div>
+                    {getStatusBadge(duty.status, duty.is_verified)}
                   </div>
-                  
-                  <div className="flex items-center justify-between mt-2 pt-2 border-t">
-                    <div className="flex items-center gap-2">
-                        {getStatusBadge(collection.status)}
-                        {collection.status === 'completed' && collection.completed_by_name && (
-                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                <User className="w-3 h-3" /> {collection.completed_by_name}
-                            </span>
-                        )}
-                    </div>
+                  <div className="text-xs text-muted-foreground flex items-center gap-1 bg-muted/50 p-2 rounded"><Calendar className="w-3 h-3"/>Target: {format(parseISO(duty.rotation_date), 'PPP')}{overdue && <span className="text-red-600 font-bold ml-auto uppercase text-[10px]">Overdue</span>}</div>
+                  <div className="flex gap-2 mt-auto pt-2 border-t">
+                    {duty.status === 'completed' && !duty.is_verified && (<Button size="sm" className="flex-1 bg-green-600 hover:bg-green-700" onClick={() => { setSelectedTask(duty); setVerifyModalOpen(true); }}><ShieldCheck className="w-3 h-3 mr-1"/> Verify</Button>)}
+                    {(overdue || duty.status === 'pending' || (duty.status === 'completed' && !duty.is_verified)) && duty.status !== 'missed' && duty.lodger_id && (<Button size="sm" variant="destructive" className="flex-1" onClick={() => { setSelectedTask(duty); setFineModalOpen(true); }}><Gavel className="w-3 h-3 mr-1"/> Fine</Button>)}
                   </div>
                 </div>
-              ))}
-            </div>}
-          </CardContent>
-        </Card>
-      </div>
+              );
+            })}
+          </div>
+        </TabsContent>
+
+        {/* TAB 2: COUNCIL (With Reschedule) */}
+        <TabsContent value="council" className="mt-6 w-full">
+          <Card className="w-full">
+            <CardContent className="p-0">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-muted text-muted-foreground">
+                    <tr><th className="p-4 font-medium">Property</th><th className="p-4 font-medium">Bin Type</th><th className="p-4 font-medium">Collection Date</th><th className="p-4 font-medium text-right">Actions</th></tr>
+                </thead>
+                <tbody>
+                {councilDuties.map((c) => (
+                    <tr key={c.id} className="border-b last:border-0 hover:bg-muted/5">
+                        <td className="p-4 font-medium">{c.property_name}</td>
+                        <td className="p-4"><Badge variant="outline">{c.bin_type}</Badge></td>
+                        <td className="p-4"><div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-muted-foreground"/> {format(parseISO(c.next_collection_date), 'EEE, d MMM yyyy')}</div></td>
+                        <td className="p-4 text-right">
+                             <DropdownMenu>
+                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="w-4 h-4"/></Button></DropdownMenuTrigger>
+                                <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => { setSelectedCouncilTask(c); setRescheduleModalOpen(true); }}><Clock className="w-4 h-4 mr-2"/> Reschedule</DropdownMenuItem></DropdownMenuContent>
+                            </DropdownMenu>
+                        </td>
+                    </tr>
+                ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TAB 3: HISTORY (With Visible Actions) */}
+        <TabsContent value="history" className="mt-6 w-full">
+          <div className="flex gap-2 mb-4 w-full"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"/><Input placeholder="Search property..." className="pl-9 w-full" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div></div>
+          <div className="border rounded-lg overflow-hidden bg-card w-full shadow-sm">
+            <table className="w-full text-sm table-auto">
+                <thead className="bg-muted/50 text-muted-foreground border-b">
+                    <tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">Property</th><th className="p-4 text-left">Lodger</th><th className="p-4 text-left">Status</th><th className="p-4 text-right">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y">
+                    {historyLog.filter(h => h.property_name.toLowerCase().includes(searchTerm.toLowerCase())).map((log) => (
+                        <tr key={log.id} className="hover:bg-muted/5">
+                            <td className="p-4">{format(parseISO(log.rotation_date), 'dd/MM/yy')}</td>
+                            <td className="p-4">{log.property_name}</td>
+                            <td className="p-4">{log.lodger_name}</td>
+                            <td className="p-4">{getStatusBadge(log.status, log.is_verified)}</td>
+                            <td className="p-4 text-right">
+                                <div className="flex justify-end gap-2">
+                                    {/* ALWAYS VISIBLE BUTTONS */}
+                                    {log.status === 'completed' && !log.is_verified && (
+                                        <Button size="sm" className="h-8 px-3 bg-green-600 hover:bg-green-700 text-white shadow-sm" onClick={() => { setSelectedTask(log); setVerifyModalOpen(true); }}><ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Verify</Button>
+                                    )}
+                                    {!log.is_verified && log.status !== 'missed' && log.lodger_id && (
+                                        <Button size="sm" variant="outline" className="h-8 px-3 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 hover:border-red-300" onClick={() => { setSelectedTask(log); setFineModalOpen(true); }}><Gavel className="h-3.5 w-3.5 mr-1.5" /> Fine</Button>
+                                    )}
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+        </TabsContent>
+      </Tabs>
+
+      {/* MODALS */}
+      <Dialog open={verifyModalOpen} onOpenChange={setVerifyModalOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Verify Duty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><p>Confirm {selectedTask?.lodger_name} completed task.</p><Label>Notes</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="outline" onClick={() => setVerifyModalOpen(false)}>Cancel</Button><Button className="bg-green-600" onClick={handleVerify}>Confirm</Button></DialogFooter></DialogContent>
+      </Dialog>
+      <Dialog open={fineModalOpen} onOpenChange={setFineModalOpen}>
+        <DialogContent className="border-red-200"><DialogHeader><DialogTitle className="text-red-600">Issue Penalty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="bg-red-50 p-3 rounded text-sm text-red-800">Marking as Missed & Charging.</div><Label>Amount (£)</Label><Input type="number" value={fineAmount} onChange={e => setFineAmount(e.target.value)} /><Label>Reason</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="ghost" onClick={() => setFineModalOpen(false)}>Cancel</Button><Button variant="destructive" onClick={handleIssueFine}>Confirm Penalty</Button></DialogFooter></DialogContent>
+      </Dialog>
+      
+      {/* RESCHEDULE MODAL */}
+      <Dialog open={rescheduleModalOpen} onOpenChange={setRescheduleModalOpen}>
+        <DialogContent>
+            <DialogHeader><DialogTitle>Reschedule Collection</DialogTitle></DialogHeader>
+            <div className="py-4 space-y-4">
+                <p className="text-sm text-muted-foreground">Select a new date for {selectedCouncilTask?.bin_type} bin collection at {selectedCouncilTask?.property_name}.</p>
+                <div className="space-y-2">
+                    <Label>New Date</Label>
+                    <Input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} min={new Date().toISOString().split("T")[0]} />
+                </div>
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setRescheduleModalOpen(false)}>Cancel</Button>
+                <Button onClick={handleReschedule} disabled={!newDate || processing}>Update Date</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

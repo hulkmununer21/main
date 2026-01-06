@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { 
-  FolderOpen, FileText, AlertTriangle, CheckCircle, Download, Eye, Upload, 
-  Trash2, Loader2, Calendar as CalendarIcon, Search 
+  FolderOpen, FileText, AlertTriangle, Download, Eye, Upload, 
+  Trash2, Loader2, Calendar as CalendarIcon, Search, X, Paperclip 
 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
@@ -25,7 +25,7 @@ interface DocumentRecord {
   file_size: number;
   expiry_date: string | null;
   created_at: string;
-  document_status: string; // 'valid', 'expired', 'expiring'
+  document_status: string; 
   tenancies?: {
     lodger_profiles: { full_name: string };
     properties: { property_name: string };
@@ -60,6 +60,9 @@ const DocumentManagement = () => {
   const [selectedTenancyId, setSelectedTenancyId] = useState("");
   const [docType, setDocType] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  
+  // Multiple Files State
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- 1. FETCH DATA ---
@@ -67,7 +70,7 @@ const DocumentManagement = () => {
     try {
       setLoading(true);
       
-      // A. Fetch Documents with Relations
+      // A. Fetch Documents
       const { data: docs, error } = await supabase
         .from('documents')
         .select(`
@@ -83,7 +86,7 @@ const DocumentManagement = () => {
       if (error) throw error;
       setDocuments(docs || []);
 
-      // B. Fetch Active Tenancies for Upload Dropdown
+      // B. Fetch Active Tenancies
       const { data: tenancies, error: tenError } = await supabase
         .from('tenancies')
         .select(`
@@ -96,7 +99,6 @@ const DocumentManagement = () => {
 
       if (tenError) throw tenError;
 
-      // Flatten for easier usage
       const formattedTenancies = tenancies?.map((t: any) => ({
         id: t.id,
         lodger_id: t.lodger_id,
@@ -110,60 +112,74 @@ const DocumentManagement = () => {
       setActiveTenancies(formattedTenancies);
 
     } catch (error: any) {
-      console.error("Error fetching documents:", error);
+      console.error("Error fetching data:", error);
       toast.error("Failed to load documents");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchDocuments();
-  }, []);
+  useEffect(() => { fetchDocuments(); }, []);
 
-  // --- 2. UPLOAD HANDLER ---
+  // --- 2. FILE HANDLING ---
+  
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const filesArray = Array.from(e.target.files);
+      setSelectedFiles(prev => [...prev, ...filesArray]);
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // --- 3. BULK UPLOAD HANDLER ---
   const handleUpload = async () => {
-    const file = fileInputRef.current?.files?.[0];
-    if (!file || !selectedTenancyId || !docType) {
-      return toast.error("Please fill in all required fields and select a file.");
+    if (selectedFiles.length === 0 || !selectedTenancyId || !docType) {
+      return toast.error("Please select a tenancy, document type, and at least one file.");
     }
 
     setUploading(true);
     try {
-      // 1. Upload to Storage Bucket 'tenancy'
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${docType.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}.${fileExt}`;
-      const filePath = `${selectedTenancyId}/${fileName}`; // Organized by Tenancy ID
-
-      const { error: uploadError } = await supabase.storage
-        .from('tenancy')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      // 2. Resolve Foreign Keys based on selected Tenancy
       const tenancy = activeTenancies.find(t => t.id === selectedTenancyId);
-      
       if (!tenancy) throw new Error("Tenancy details not found");
 
-      // 3. Insert Record into DB
-      const { error: dbError } = await supabase.from('documents').insert({
-        tenancy_id: selectedTenancyId,
-        lodger_id: tenancy.lodger_id,     // Explicit linking for easier queries later
-        property_id: tenancy.property_id, // Explicit linking
-        room_id: tenancy.room_id,         // Explicit linking
-        document_type: docType,
-        file_name: file.name,
-        file_path: filePath,
-        file_size: file.size,
-        expiry_date: expiryDate || null,
-        document_status: 'valid',
-        uploaded_by: user?.id
+      // Process all files concurrently
+      const uploadPromises = selectedFiles.map(async (file) => {
+        const fileExt = file.name.split('.').pop();
+        // Unique Name: Type_Timestamp_Random.ext
+        const uniqueName = `${docType.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const filePath = `${selectedTenancyId}/${uniqueName}`; 
+
+        // A. Upload to Storage
+        const { error: uploadError } = await supabase.storage
+          .from('tenancy')
+          .upload(filePath, file);
+
+        if (uploadError) throw uploadError;
+
+        // B. Insert into DB
+        const { error: dbError } = await supabase.from('documents').insert({
+          tenancy_id: selectedTenancyId,
+          lodger_id: tenancy.lodger_id,
+          property_id: tenancy.property_id,
+          room_id: tenancy.room_id,
+          document_type: docType,
+          file_name: file.name, // Keep original name for display
+          file_path: filePath,
+          file_size: file.size,
+          expiry_date: expiryDate || null,
+          document_status: 'valid',
+          uploaded_by: user?.id
+        });
+
+        if (dbError) throw dbError;
       });
 
-      if (dbError) throw dbError;
+      await Promise.all(uploadPromises);
 
-      toast.success("Document uploaded successfully");
+      toast.success(`${selectedFiles.length} document(s) uploaded successfully`);
       setIsUploadOpen(false);
       resetForm();
       fetchDocuments();
@@ -176,17 +192,23 @@ const DocumentManagement = () => {
     }
   };
 
-  // --- 3. FILE ACTIONS ---
-  const handleDownload = async (path: string, fileName: string) => {
+  const resetForm = () => {
+    setSelectedTenancyId("");
+    setDocType("");
+    setExpiryDate("");
+    setSelectedFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // --- 4. FILE ACTIONS ---
+  const handleDownload = async (path: string) => {
     try {
       const { data, error } = await supabase.storage
         .from('tenancy')
-        .createSignedUrl(path, 60); // Valid for 60 seconds
+        .createSignedUrl(path, 60);
 
       if (error) throw error;
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
-      }
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank');
     } catch (error) {
       toast.error("Could not download file");
     }
@@ -196,13 +218,8 @@ const DocumentManagement = () => {
     if(!confirm("Are you sure you want to delete this document?")) return;
 
     try {
-      // Delete from Storage
-      const { error: storageError } = await supabase.storage.from('tenancy').remove([path]);
-      if (storageError) console.warn("Storage delete warning:", storageError);
-
-      // Delete from DB
-      const { error: dbError } = await supabase.from('documents').delete().eq('id', id);
-      if (dbError) throw dbError;
+      await supabase.storage.from('tenancy').remove([path]);
+      await supabase.from('documents').delete().eq('id', id);
 
       toast.success("Document deleted");
       setDocuments(prev => prev.filter(d => d.id !== id));
@@ -211,27 +228,18 @@ const DocumentManagement = () => {
     }
   };
 
-  const resetForm = () => {
-    setSelectedTenancyId("");
-    setDocType("");
-    setExpiryDate("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  // --- HELPER: Status Calculator ---
+  // --- HELPERS ---
   const getDocStatus = (doc: DocumentRecord) => {
     if (!doc.expiry_date) return { label: "Valid", color: "default" };
-    
     const expiry = parseISO(doc.expiry_date);
     const today = new Date();
-    const warningDate = addDays(today, 30); // Warn if expires in 30 days
+    const warningDate = addDays(today, 30);
 
     if (isPast(expiry)) return { label: "Expired", color: "destructive" };
     if (isBefore(expiry, warningDate)) return { label: "Expiring Soon", color: "secondary" };
     return { label: "Valid", color: "default" };
   };
 
-  // --- HELPER: Format Bytes ---
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -240,7 +248,6 @@ const DocumentManagement = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // Filtering
   const filteredDocs = documents.filter(doc => 
     doc.file_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     doc.tenancies?.lodger_profiles?.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -264,34 +271,30 @@ const DocumentManagement = () => {
         
         <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
           <DialogTrigger asChild>
-            <Button><Upload className="w-4 h-4 mr-2" /> Upload Document</Button>
+            <Button><Upload className="w-4 h-4 mr-2" /> Upload Documents</Button>
           </DialogTrigger>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Upload Document</DialogTitle>
+              <DialogTitle>Upload Documents</DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               
-              {/* 1. Select Tenancy */}
               <div className="space-y-2">
-                <Label>Assign to Tenancy (Active)</Label>
+                <Label>Assign to Tenancy</Label>
                 <Select onValueChange={setSelectedTenancyId} value={selectedTenancyId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select Lodger / Property" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select Lodger / Property" /></SelectTrigger>
                   <SelectContent className="max-h-[200px]">
                     {activeTenancies.map((t) => (
                       <SelectItem key={t.id} value={t.id}>
-                        {t.lodger_name} — {t.property_name} (Room {t.room_number})
+                        {t.lodger_name} — {t.property_name} (Rm {t.room_number})
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* 2. Document Type */}
               <div className="space-y-2">
-                <Label>Document Type</Label>
+                <Label>Document Category</Label>
                 <Select onValueChange={setDocType} value={docType}>
                   <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
                   <SelectContent>
@@ -300,9 +303,8 @@ const DocumentManagement = () => {
                 </Select>
               </div>
 
-              {/* 3. Expiry Date */}
               <div className="space-y-2">
-                <Label>Expiry Date (Optional)</Label>
+                <Label>Expiry Date (Optional - Applies to all)</Label>
                 <div className="relative">
                     <Input 
                         type="date" 
@@ -314,25 +316,50 @@ const DocumentManagement = () => {
                 </div>
               </div>
 
-              {/* 4. File Input */}
+              {/* MULTIPLE FILE INPUT */}
               <div className="space-y-2">
-                <Label>File</Label>
-                <Input type="file" ref={fileInputRef} className="cursor-pointer" />
+                <Label>Files</Label>
+                <div className="flex items-center gap-2">
+                    <Input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        multiple // ✅ Enable multiple selection
+                        className="cursor-pointer" 
+                        onChange={handleFileSelect}
+                    />
+                </div>
+                
+                {/* File Preview List */}
+                {selectedFiles.length > 0 && (
+                    <div className="mt-2 space-y-2 border rounded-md p-2 bg-muted/20">
+                        <p className="text-xs font-semibold text-muted-foreground mb-1">Selected Files ({selectedFiles.length}):</p>
+                        {selectedFiles.map((file, idx) => (
+                            <div key={idx} className="flex justify-between items-center text-xs bg-background p-1.5 rounded border">
+                                <span className="truncate max-w-[300px] flex items-center gap-2">
+                                    <Paperclip className="w-3 h-3 text-muted-foreground"/> {file.name}
+                                </span>
+                                <button onClick={() => removeFile(idx)} className="text-red-500 hover:bg-red-100 p-1 rounded">
+                                    <X className="w-3 h-3"/>
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
               </div>
 
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsUploadOpen(false)}>Cancel</Button>
-              <Button onClick={handleUpload} disabled={uploading}>
-                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : null}
-                Upload
+              <Button onClick={handleUpload} disabled={uploading || selectedFiles.length === 0}>
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : <Upload className="w-4 h-4 mr-2"/>}
+                Upload {selectedFiles.length > 0 ? `(${selectedFiles.length})` : ''}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats */}
       <div className="grid md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-6 flex items-center gap-3">
@@ -340,7 +367,6 @@ const DocumentManagement = () => {
             <div><p className="text-2xl font-bold">{documents.length}</p><p className="text-sm text-muted-foreground">Total Docs</p></div>
           </CardContent>
         </Card>
-        {/* ... (Other stats logic remains similar, simplified for brevity) ... */}
         <Card>
           <CardContent className="p-6 flex items-center gap-3">
             <div className="bg-destructive/10 p-3 rounded-full"><AlertTriangle className="w-5 h-5 text-destructive" /></div>
@@ -348,13 +374,13 @@ const DocumentManagement = () => {
                 <p className="text-2xl font-bold">
                     {documents.filter(d => getDocStatus(d).label !== 'Valid').length}
                 </p>
-                <p className="text-sm text-muted-foreground">Expiring/Expired</p>
+                <p className="text-sm text-muted-foreground">Attention Needed</p>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Filter Bar */}
+      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
         <Input 
@@ -365,7 +391,7 @@ const DocumentManagement = () => {
         />
       </div>
 
-      {/* Documents List */}
+      {/* List */}
       <div className="space-y-3">
         {filteredDocs.length === 0 ? (
             <Card className="p-8 text-center text-muted-foreground">
@@ -379,7 +405,6 @@ const DocumentManagement = () => {
                   <CardContent className="p-4">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                       
-                      {/* Icon & Main Info */}
                       <div className="flex items-start gap-4 flex-1">
                         <div className="mt-1 bg-secondary/20 p-2 rounded">
                             <FileText className="w-6 h-6 text-secondary-foreground" />
@@ -397,7 +422,7 @@ const DocumentManagement = () => {
                                 {doc.tenancies?.lodger_profiles?.full_name || "Unknown Lodger"}
                             </span>
                             <span>•</span>
-                            <span>{doc.tenancies?.properties?.property_name} (Rm {doc.tenancies?.rooms?.room_number})</span>
+                            <span>{doc.tenancies?.properties?.property_name}</span>
                             <span>•</span>
                             <span>{formatBytes(doc.file_size)}</span>
                             {doc.expiry_date && (
@@ -409,15 +434,11 @@ const DocumentManagement = () => {
                         </div>
                       </div>
 
-                      {/* Actions */}
                       <div className="flex items-center gap-2 self-end md:self-center">
-                        <Button size="sm" variant="outline" onClick={() => handleDownload(doc.file_path, doc.file_name)}>
+                        <Button size="sm" variant="outline" onClick={() => handleDownload(doc.file_path)}>
                           <Eye className="w-3 h-3 mr-2" /> View
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => handleDownload(doc.file_path, doc.file_name)}>
-                          <Download className="w-3 h-3" />
-                        </Button>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleDelete(doc.id, doc.file_path)}>
+                        <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={() => handleDelete(doc.id, doc.file_path)}>
                           <Trash2 className="w-3 h-3" />
                         </Button>
                       </div>

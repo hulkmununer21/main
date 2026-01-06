@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { 
   Bell, User, LogOut, Wrench, Calendar, Send, 
-  Loader2, ImageIcon, X, AlertTriangle, Clock, FileText 
+  Loader2, ImageIcon, X, AlertTriangle, Clock, FileText, ShieldCheck 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -27,7 +27,8 @@ interface Complaint {
   complaint_priority: string;
   complaint_status: string;
   created_at: string;
-  attachments: string[] | null;
+  attachments: string[] | null;   // Your uploads
+  evidence_urls: string[] | null; // Staff resolution uploads
   lodger_id: string;
 }
 
@@ -98,8 +99,8 @@ const LodgerMaintenance = () => {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const newFiles = Array.from(e.target.files);
-      if (selectedFiles.length + newFiles.length > 3) {
-        toast.error("Maximum 3 files allowed.");
+      if (selectedFiles.length + newFiles.length > 5) {
+        toast.error("Maximum 5 files allowed.");
         return;
       }
       setSelectedFiles(prev => [...prev, ...newFiles]);
@@ -123,7 +124,8 @@ const LodgerMaintenance = () => {
     try {
       // A. Upload Images
       if (selectedFiles.length > 0) {
-        for (const file of selectedFiles) {
+        // Upload files concurrently
+        const uploadPromises = selectedFiles.map(async (file) => {
           const fileExt = file.name.split('.').pop();
           const fileName = `${activeTenancy.lodger_id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
           
@@ -137,8 +139,11 @@ const LodgerMaintenance = () => {
             .from('complaint-evidence')
             .getPublicUrl(fileName);
             
-          attachmentUrls.push(urlData.publicUrl);
-        }
+          return urlData.publicUrl;
+        });
+
+        const uploadedUrls = await Promise.all(uploadPromises);
+        attachmentUrls.push(...uploadedUrls);
       }
 
       // B. Insert Record
@@ -150,7 +155,7 @@ const LodgerMaintenance = () => {
         subject: subject,
         description: description,
         complaint_category: category,
-        priority: priority,
+        complaint_priority: priority,
         complaint_status: 'pending',
         attachments: attachmentUrls.length > 0 ? attachmentUrls : null,
         created_at: new Date().toISOString()
@@ -180,9 +185,11 @@ const LodgerMaintenance = () => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'resolved':
-        return { variant: "outline" as const, className: "border-green-600 text-green-600" };
+        return { variant: "outline" as const, className: "border-green-600 text-green-600 bg-green-50" };
       case 'in_progress':
         return { variant: "default" as const, className: "bg-blue-600" };
+      case 'rejected':
+        return { variant: "destructive" as const, className: "" };
       default:
         return { variant: "secondary" as const, className: "" };
     }
@@ -251,20 +258,39 @@ const LodgerMaintenance = () => {
                             </Badge>
                           </div>
                           
-                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{item.description}</p>
+                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3 whitespace-pre-wrap">{item.description}</p>
                           
-                          {/* Attachments Preview */}
+                          {/* 1. Lodger's Attachments (Your Uploads) */}
                           {item.attachments && item.attachments.length > 0 && (
-                            <div className="flex gap-2 mb-3">
-                                {item.attachments.map((url, i) => (
-                                    <a key={i} href={url} target="_blank" rel="noreferrer" className="block h-10 w-10 shrink-0 border rounded overflow-hidden hover:opacity-80">
-                                        <img src={url} className="h-full w-full object-cover" />
-                                    </a>
-                                ))}
+                            <div className="mb-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">My Evidence</p>
+                                <div className="flex gap-2">
+                                    {item.attachments.map((url, i) => (
+                                        <a key={i} href={url} target="_blank" rel="noreferrer" className="block h-12 w-12 shrink-0 border rounded overflow-hidden hover:opacity-80">
+                                            <img src={url} className="h-full w-full object-cover" />
+                                        </a>
+                                    ))}
+                                </div>
                             </div>
                           )}
 
-                          <div className="flex items-center gap-2 mt-2">
+                          {/* 2. Staff Resolution Evidence (Proof of Fix) */}
+                          {item.evidence_urls && item.evidence_urls.length > 0 && (
+                            <div className="mb-3 p-2 bg-green-50/50 border border-green-100 rounded-md">
+                                <p className="text-[10px] uppercase font-bold text-green-700 mb-1 flex items-center gap-1">
+                                    <ShieldCheck className="w-3 h-3"/> Resolution Proof
+                                </p>
+                                <div className="flex gap-2">
+                                    {item.evidence_urls.map((url, i) => (
+                                        <a key={i} href={url} target="_blank" rel="noreferrer" className="block h-12 w-12 shrink-0 border border-green-200 rounded overflow-hidden hover:opacity-80">
+                                            <img src={url} className="h-full w-full object-cover" />
+                                        </a>
+                                    ))}
+                                </div>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-2 mt-2 pt-2 border-t">
                             <Badge variant="outline" className={getPriorityBadge(item.complaint_priority)}>
                                 {item.complaint_priority}
                             </Badge>
@@ -344,7 +370,7 @@ const LodgerMaintenance = () => {
 
                   {/* Image Upload */}
                   <div className="space-y-3 pt-2">
-                    <Label>Evidence (Photos)</Label>
+                    <Label>Evidence (Select Multiple Photos)</Label>
                     <div className="flex flex-wrap gap-3">
                       {selectedFiles.map((file, idx) => (
                         <div key={idx} className="relative h-20 w-20 border rounded-md overflow-hidden group">
@@ -363,13 +389,13 @@ const LodgerMaintenance = () => {
                         className="h-20 w-20 border-2 border-dashed rounded-md flex flex-col items-center justify-center cursor-pointer hover:bg-muted/50 transition-colors text-muted-foreground"
                       >
                         <ImageIcon className="h-5 w-5 mb-1" />
-                        <span className="text-[10px]">Add Photo</span>
+                        <span className="text-[10px] text-center px-1">Add Photos</span>
                       </div>
                       <input 
                         type="file" 
                         ref={fileInputRef} 
                         className="hidden" 
-                        multiple 
+                        multiple // ✅ Enabled multiple
                         accept="image/*"
                         onChange={handleFileSelect}
                       />
