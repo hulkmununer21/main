@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Calendar, Clock, MapPin, UserCheck, CheckCircle, FileText, ChevronRight, AlertTriangle, Loader2, DoorOpen, ListChecks, X } from "lucide-react";
+import { Clock, MapPin, UserCheck, CheckCircle, FileText, ChevronRight, AlertTriangle, Loader2, ListChecks, X } from "lucide-react";
 import { format, parseISO, isPast } from "date-fns";
 
 // === PROPS ===
@@ -28,7 +28,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
 
   useEffect(() => {
     const fetchInspections = async () => {
-      if (!tenancy?.property_id) return;
+      if (!tenancy?.property_id || !tenancy?.room_id) return;
       setLoading(true);
 
       try {
@@ -41,11 +41,10 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
 
         if (error) throw error;
 
-        // 2. Filter Scope
+        // 2. Filter Scope - MODIFIED TO SHOW ONLY ROOM SCOPE
         const relevantInspections = (rawInspections || []).filter((insp: any) => {
-            const isPropertyWide = insp.room_id === null;
-            const isMyRoom = insp.room_id === tenancy.room_id;
-            return isPropertyWide || isMyRoom;
+            // Strictly check if the inspection belongs to this specific room ID
+            return insp.room_id === tenancy.room_id;
         });
 
         // 3. Resolve Inspector Names
@@ -91,11 +90,11 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
     <div className="space-y-8 max-w-[1600px]">
       
       <div>
-        <h2 className="text-2xl font-bold tracking-tight">Inspections</h2>
-        <p className="text-muted-foreground">Monitor property checks and compliance reports.</p>
+        <h2 className="text-2xl font-bold tracking-tight">Room Inspections</h2>
+        <p className="text-muted-foreground">Monitor inspections specific to your private room.</p>
       </div>
 
-      {/* 1. UPCOMING INSPECTIONS SECTION (Redesigned UI) */}
+      {/* 1. UPCOMING INSPECTIONS SECTION */}
       <div className="space-y-4">
         {upcomingInspections.length > 0 ? (
             <div className="space-y-4">
@@ -125,16 +124,10 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                                         <div>
                                             <h3 className="text-lg font-bold text-gray-900 capitalize flex items-center gap-2">
                                                 {inspection.inspection_type?.replace('_', ' ')}
-                                                {inspection.room_id ? (
-                                                    <Badge variant="outline" className="text-xs font-normal border-purple-200 text-purple-700 bg-purple-50">Room Check</Badge>
-                                                ) : (
-                                                    <Badge variant="outline" className="text-xs font-normal border-orange-200 text-orange-700 bg-orange-50">Property Wide</Badge>
-                                                )}
+                                                <Badge variant="outline" className="text-xs font-normal border-purple-200 text-purple-700 bg-purple-50">Room Check</Badge>
                                             </h3>
                                             <p className="text-sm text-muted-foreground mt-1">
-                                                {inspection.room_id 
-                                                    ? "This inspection is for your private room." 
-                                                    : "This inspection covers common areas (Kitchen, Living Room, etc)."}
+                                                This inspection is for your private room.
                                             </p>
                                         </div>
                                     </div>
@@ -155,7 +148,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                                             <div>
                                                 <p className="text-xs font-bold text-gray-500 uppercase">Scope</p>
                                                 <p className="text-sm font-medium text-gray-900">
-                                                    {inspection.room_id ? "Private Room" : "Common Areas"}
+                                                    Private Room
                                                 </p>
                                             </div>
                                         </div>
@@ -179,9 +172,9 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                     <div className="h-12 w-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-3">
                         <CheckCircle className="h-6 w-6" />
                     </div>
-                    <h3 className="font-semibold text-lg">No Inspections Scheduled</h3>
+                    <h3 className="font-semibold text-lg">No Room Inspections Scheduled</h3>
                     <p className="text-muted-foreground text-sm max-w-sm mt-1">
-                        You are all caught up! We will notify you when the next property check is arranged.
+                        You are all caught up! We will notify you when the next room check is arranged.
                     </p>
                 </CardContent>
             </Card>
@@ -190,7 +183,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
 
       {/* 2. HISTORY TABLE */}
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold flex items-center gap-2">History</h3>
+        <h3 className="text-lg font-semibold flex items-center gap-2">Room Inspection History</h3>
         <Card>
             <div className="relative w-full overflow-auto">
                 <table className="w-full caption-bottom text-sm text-left">
@@ -205,7 +198,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                 </thead>
                 <tbody className="[&_tr:last-child]:border-0">
                     {history.length === 0 ? (
-                        <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No inspection history.</td></tr>
+                        <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No room inspection history.</td></tr>
                     ) : (
                         history.map((item) => (
                         <tr key={item.id} className="border-b transition-colors hover:bg-muted/50">
@@ -213,11 +206,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
                             {format(parseISO(item.scheduled_date), "MMM d, yyyy")}
                             </td>
                             <td className="p-4 align-middle">
-                                {item.room_id ? (
-                                    <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">Room</Badge>
-                                ) : (
-                                    <Badge variant="outline" className="text-xs">Property</Badge>
-                                )}
+                                <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">Room</Badge>
                             </td>
                             <td className="p-4 align-middle capitalize">{item.inspection_type?.replace('_', ' ')}</td>
                             <td className="p-4 align-middle">
@@ -256,7 +245,7 @@ const LodgerInspections = ({ tenancy }: LodgerInspectionsProps) => {
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
-                    <FileText className="h-5 w-5" /> Inspection Report
+                    <FileText className="h-5 w-5" /> Room Inspection Report
                 </DialogTitle>
                 <DialogDescription>
                     Completed on {selectedReport && format(parseISO(selectedReport.scheduled_date), 'PPP')}
