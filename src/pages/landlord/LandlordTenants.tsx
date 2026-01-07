@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Bell, LogOut, Plus, Users, Phone, Mail, MapPin, Check, X, Edit } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Bell, LogOut, Plus, Users, Phone, Mail, MapPin, Check, X, Edit, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useAuth } from "@/contexts/useAuth";
@@ -12,9 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabaseClient";
 
 const LandlordTenants = () => {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [tenants, setTenants] = useState<any[]>([]);
+  const [properties, setProperties] = useState<any[]>([]);
   const [isAddTenantOpen, setIsAddTenantOpen] = useState(false);
   const [tenantForm, setTenantForm] = useState({
     name: "",
@@ -25,32 +29,81 @@ const LandlordTenants = () => {
     rent: ""
   });
 
-  const tenants = [
-    {
-      id: 1,
-      name: "John Smith",
-      email: "john.smith@email.com",
-      phone: "+44 7700 900123",
-      property: "Modern City Centre Studio",
-      address: "Manchester, M1 1AA",
-      rent: 750,
-      moveInDate: "2024-01-15",
-      paymentStatus: "Paid",
-      leaseEnd: "2025-01-14"
-    },
-    {
-      id: 2,
-      name: "Sarah Johnson",
-      email: "sarah.j@email.com",
-      phone: "+44 7700 900456",
-      property: "Riverside Apartment",
-      address: "Bristol, BS1 5TH",
-      rent: 950,
-      moveInDate: "2023-06-01",
-      paymentStatus: "Paid",
-      leaseEnd: "2025-05-31"
-    },
-  ];
+  const fetchData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const landlordProfileId = (user.profile as any)?.id;
+      if (!landlordProfileId) {
+        toast({ title: "Error", description: "Landlord profile not found" });
+        setLoading(false);
+        return;
+      }
+
+      // Fetch properties
+      const { data: props } = await supabase
+        .from('properties')
+        .select('*')
+        .eq('landlord_id', landlordProfileId);
+      
+      setProperties(props || []);
+      const propIds = props?.map(p => p.id) || [];
+
+      if (propIds.length > 0) {
+        // Fetch tenancies with lodger profiles
+        const { data: tenancyData } = await supabase
+          .from('tenancies')
+          .select('*')
+          .in('property_id', propIds)
+          .eq('tenancy_status', 'active');
+
+        if (tenancyData) {
+          // Fetch lodger details
+          const lodgerIds = tenancyData.map((t: any) => t.lodger_id).filter(Boolean);
+          const { data: lodgers } = await supabase
+            .from('lodger_profiles')
+            .select('*')
+            .in('id', lodgerIds);
+
+          // Merge data
+          const tenantsWithDetails = tenancyData.map((tenancy: any) => {
+            const lodger = lodgers?.find((l: any) => l.id === tenancy.lodger_id);
+            const property = props?.find((p: any) => p.id === tenancy.property_id);
+            return {
+              id: tenancy.id,
+              name: lodger?.full_name || 'Not allocated',
+              email: lodger?.email || 'Not allocated',
+              phone: lodger?.phone || 'Not allocated',
+              property: property?.property_name || 'Not allocated',
+              address: property ? `${property.city}, ${property.postcode}` : 'Not allocated',
+              rent: tenancy.monthly_rent || 0,
+              moveInDate: tenancy.move_in_date || 'Not allocated',
+              paymentStatus: tenancy.payment_status || 'Unknown',
+              leaseEnd: tenancy.lease_end_date || 'Not allocated'
+            };
+          });
+          setTenants(tenantsWithDetails);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading tenants:", error);
+      toast({ title: "Error", description: "Failed to load tenants data" });
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
 
   const handleAddTenant = () => {
     toast({
@@ -214,7 +267,15 @@ const LandlordTenants = () => {
           </div>
 
           <div className="space-y-4">
-            {tenants.map((tenant) => (
+            {tenants.length === 0 ? (
+              <Card>
+                <CardContent className="p-12 text-center">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground">No tenants allocated</p>
+                </CardContent>
+              </Card>
+            ) : (
+              tenants.map((tenant) => (
               <Card key={tenant.id}>
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between mb-4">
@@ -267,7 +328,8 @@ const LandlordTenants = () => {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+            ))
+            )}
           </div>
 
           <div className="h-20 md:h-0"></div>

@@ -38,7 +38,7 @@ interface User {
   full_name: string;
   phone?: string;
   role_type: string;
-  is_active: boolean;
+  is_verified: boolean;
   created_at: string;
   profile?: Record<string, unknown>;
 }
@@ -128,6 +128,10 @@ const UserManagement = () => {
         const landlord = landlords?.find(l => l.user_id === role.user_id);
         const profile = lodger || landlord;
 
+        // Get verification status from the appropriate profile column
+        // lodger_profiles uses is_active, landlord_profiles uses is_verified
+        const isVerified = lodger ? lodger.is_active : (landlord ? landlord.is_verified : false);
+
         return {
           id: profile?.id || role.user_id,
           user_id: role.user_id,
@@ -135,7 +139,7 @@ const UserManagement = () => {
           full_name: profile?.full_name || 'N/A',
           phone: profile?.phone,
           role_type: role.role,
-          is_active: role.is_active,
+          is_verified: isVerified,
           created_at: role.created_at,
           profile: profile || {},
         };
@@ -373,15 +377,23 @@ const UserManagement = () => {
 
         // 2. Create profile based on role (BEFORE user_roles as per signup.tsx)
         const profileTable = userForm.role_type === 'lodger' ? 'lodger_profiles' : 'landlord_profiles';
+        // lodger_profiles uses is_active, landlord_profiles uses is_verified
+        const profileData: any = {
+          user_id: userId,
+          email: userForm.email,
+          full_name: userForm.full_name,
+          phone: userForm.phone || null,
+        };
+        
+        if (userForm.role_type === 'lodger') {
+          profileData.is_active = true;
+        } else {
+          profileData.is_verified = true;
+        }
+        
         const { error: profileError } = await supabase
           .from(profileTable)
-          .insert({
-            user_id: userId,
-            email: userForm.email,
-            full_name: userForm.full_name,
-            phone: userForm.phone || null,
-            is_active: true,
-          });
+          .insert(profileData);
 
         if (profileError) throw profileError;
 
@@ -503,7 +515,7 @@ const UserManagement = () => {
                 <Users className="w-5 h-5 text-purple-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{users.filter(u => u.is_active).length}</p>
+                <p className="text-2xl font-bold">{users.filter(u => u.is_verified).length}</p>
                 <p className="text-sm text-muted-foreground">Active Users</p>
               </div>
             </div>
@@ -569,8 +581,8 @@ const UserManagement = () => {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={user.is_active ? 'default' : 'destructive'}>
-                        {user.is_active ? 'Active' : 'Inactive'}
+                      <Badge variant={user.is_verified ? 'default' : 'destructive'}>
+                        {user.is_verified ? 'Active' : 'Inactive'}
                       </Badge>
                     </TableCell>
                     <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
@@ -1013,8 +1025,8 @@ const UserManagement = () => {
                   </div>
                   <div>
                     <Label className="text-muted-foreground">Status</Label>
-                    <Badge variant={viewingUser.is_active ? 'default' : 'destructive'}>
-                      {viewingUser.is_active ? 'Active' : 'Inactive'}
+                    <Badge variant={viewingUser.is_verified ? 'default' : 'destructive'}>
+                      {viewingUser.is_verified ? 'Active' : 'Inactive'}
                     </Badge>
                   </div>
                   <div>
@@ -1031,7 +1043,7 @@ const UserManagement = () => {
                   <div className="grid grid-cols-2 gap-4">
                     {Object.entries(viewingUser.profile).map(([key, value]) => {
                       // Skip certain fields
-                      if (['id', 'user_id', 'created_at', 'updated_at', 'is_active', 'email', 'full_name', 'phone'].includes(key)) {
+                      if (['id', 'user_id', 'created_at', 'updated_at', 'is_active', 'is_verified', 'email', 'full_name', 'phone'].includes(key)) {
                         return null;
                       }
                       

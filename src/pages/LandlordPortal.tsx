@@ -77,7 +77,18 @@ const LandlordPortal = () => {
     if (!user) return;
     setLoading(true);
     try {
-      const { data: props, error: propError } = await supabase.from('properties').select('*');
+      // Get landlord profile ID first
+      const landlordProfileId = (user.profile as any)?.id;
+      if (!landlordProfileId) {
+        toast.error("Landlord profile not found");
+        setLoading(false);
+        return;
+      }
+
+      const { data: props, error: propError } = await supabase
+        .from('properties')
+        .select('*')
+        .eq('landlord_id', landlordProfileId);
       if (propError) throw propError;
       
       const propIds = props?.map(p => p.id) || [];

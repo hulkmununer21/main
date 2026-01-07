@@ -13,7 +13,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-// Removed BottomNav import
 import { supabase } from "@/lib/supabaseClient";
 import { format, parseISO } from "date-fns";
 
@@ -23,7 +22,7 @@ interface Complaint {
   subject: string;
   description: string;
   complaint_category: string;
-  priority: string; // ✅ Corrected property name
+  priority: string;
   complaint_status: string;
   created_at: string;
   attachments: string[] | null;   
@@ -183,6 +182,7 @@ const LodgerMaintenance = () => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'resolved':
+      case 'completed': // ✅ ADDED: Handles 'completed' same as resolved
         return { variant: "outline" as const, className: "border-green-600 text-green-600 bg-green-50" };
       case 'in_progress':
         return { variant: "default" as const, className: "bg-blue-600" };
@@ -258,7 +258,7 @@ const LodgerMaintenance = () => {
                           
                           <p className="text-sm text-muted-foreground line-clamp-2 mb-3 whitespace-pre-wrap">{item.description}</p>
                           
-                          {/* Attachments & Evidence */}
+                          {/* Attachments */}
                           {item.attachments && item.attachments.length > 0 && (
                             <div className="mb-3">
                                 <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">My Evidence</p>
@@ -272,6 +272,7 @@ const LodgerMaintenance = () => {
                             </div>
                           )}
 
+                          {/* Evidence */}
                           {item.evidence_urls && item.evidence_urls.length > 0 && (
                             <div className="mb-3 p-2 bg-green-50/50 border border-green-100 rounded-md">
                                 <p className="text-[10px] uppercase font-bold text-green-700 mb-1 flex items-center gap-1">

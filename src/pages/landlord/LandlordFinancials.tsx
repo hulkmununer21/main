@@ -1,4 +1,5 @@
-import { Bell, LogOut, DollarSign, TrendingUp, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Bell, LogOut, DollarSign, TrendingUp, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/useAuth";
@@ -6,21 +7,82 @@ import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { BottomNav } from "@/components/mobile/BottomNav";
 import { Badge } from "@/components/ui/badge";
+import { supabase } from "@/lib/supabaseClient";
 
 const LandlordFinancials = () => {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [totalIncome, setTotalIncome] = useState(0);
+  const [totalExpenses, setTotalExpenses] = useState(0);
 
-  const transactions = [
-    { id: 1, tenant: "John Smith", property: "Modern City Centre Studio", amount: 750, type: "Rent", date: "01 Dec 2024", status: "Completed" },
-    { id: 2, tenant: "Sarah Johnson", property: "Riverside Apartment", amount: 950, type: "Rent", date: "01 Dec 2024", status: "Completed" },
-    { id: 3, tenant: "Maintenance", property: "Cozy 1-Bed Flat", amount: 150, type: "Expense", date: "28 Nov 2024", status: "Completed" },
-    { id: 4, tenant: "John Smith", property: "Modern City Centre Studio", amount: 750, type: "Rent", date: "01 Nov 2024", status: "Completed" },
-    { id: 5, tenant: "Insurance", property: "All Properties", amount: 200, type: "Expense", date: "15 Nov 2024", status: "Completed" },
-  ];
+  const fetchData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const landlordProfileId = (user.profile as any)?.id;
+      if (!landlordProfileId) {
+        setLoading(false);
+        return;
+      }
 
-  const totalIncome = transactions.filter(t => t.type === "Rent").reduce((sum, t) => sum + t.amount, 0);
-  const totalExpenses = transactions.filter(t => t.type === "Expense").reduce((sum, t) => sum + t.amount, 0);
+      // Fetch properties
+      const { data: props } = await supabase
+        .from('properties')
+        .select('id, property_name')
+        .eq('landlord_id', landlordProfileId);
+      
+      const propIds = props?.map(p => p.id) || [];
+
+      if (propIds.length > 0) {
+        // Fetch extra charges (revenue)
+        const { data: charges } = await supabase
+          .from('extra_charges')
+          .select('*')
+          .in('property_id', propIds)
+          .order('created_at', { ascending: false });
+
+        // Process charges into transactions
+        const chargeTransactions = (charges || []).map((c: any) => {
+          const property = props?.find(p => p.id === c.property_id);
+          return {
+            id: c.id,
+            tenant: c.charge_type || 'Charge',
+            property: property?.property_name || 'Not allocated',
+            amount: c.amount || 0,
+            type: 'Income',
+            date: new Date(c.created_at).toLocaleDateString(),
+            status: c.charge_status === 'paid' ? 'Completed' : 'Pending'
+          };
+        });
+
+        setTransactions(chargeTransactions);
+
+        // Calculate totals
+        const income = charges?.filter(c => c.charge_status === 'paid').reduce((sum, c) => sum + (c.amount || 0), 0) || 0;
+        setTotalIncome(income);
+        setTotalExpenses(0); // No expense tracking in current schema
+      }
+    } catch (error) {
+      console.error("Error loading financials:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
   const netIncome = totalIncome - totalExpenses;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
+      </div>
+    );
+  }
 
   return (
     <>
@@ -95,32 +157,36 @@ const LandlordFinancials = () => {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {transactions.map((transaction) => (
-                  <div
-                    key={transaction.id}
-                    className="flex items-center justify-between py-3 border-b last:border-0"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-full ${transaction.type === "Rent" ? "bg-green-100 dark:bg-green-900/20" : "bg-red-100 dark:bg-red-900/20"}`}>
-                        {transaction.type === "Rent" ? (
-                          <ArrowUpRight className="h-4 w-4 text-green-600" />
-                        ) : (
-                          <ArrowDownRight className="h-4 w-4 text-red-600" />
-                        )}
+                {transactions.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No transactions available</p>
+                ) : (
+                  transactions.map((transaction) => (
+                    <div
+                      key={transaction.id}
+                      className="flex items-center justify-between py-3 border-b last:border-0"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-full ${transaction.type === "Income" ? "bg-green-100 dark:bg-green-900/20" : "bg-red-100 dark:bg-red-900/20"}`}>
+                          {transaction.type === "Income" ? (
+                            <ArrowUpRight className="h-4 w-4 text-green-600" />
+                          ) : (
+                            <ArrowDownRight className="h-4 w-4 text-red-600" />
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-medium">{transaction.tenant}</p>
+                          <p className="text-sm text-muted-foreground">{transaction.property}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium">{transaction.tenant}</p>
-                        <p className="text-sm text-muted-foreground">{transaction.property}</p>
+                      <div className="text-right">
+                        <p className={`font-semibold ${transaction.type === "Income" ? "text-green-600" : "text-red-600"}`}>
+                          {transaction.type === "Income" ? "+" : "-"}£{transaction.amount.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{transaction.date}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className={`font-semibold ${transaction.type === "Rent" ? "text-green-600" : "text-red-600"}`}>
-                        {transaction.type === "Rent" ? "+" : "-"}£{transaction.amount.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{transaction.date}</p>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>
