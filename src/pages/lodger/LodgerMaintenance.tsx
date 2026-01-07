@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { 
-  Bell, User, LogOut, Wrench, Calendar, Send, 
-  Loader2, ImageIcon, X, AlertTriangle, Clock, FileText, ShieldCheck 
+  Bell, LogOut, Send, Loader2, ImageIcon, X, ShieldCheck 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { BottomNav } from "@/components/mobile/BottomNav";
+// Removed BottomNav import
 import { supabase } from "@/lib/supabaseClient";
 import { format, parseISO } from "date-fns";
 
@@ -24,11 +23,11 @@ interface Complaint {
   subject: string;
   description: string;
   complaint_category: string;
-  complaint_priority: string;
+  priority: string; // ✅ Corrected property name
   complaint_status: string;
   created_at: string;
-  attachments: string[] | null;   // Your uploads
-  evidence_urls: string[] | null; // Staff resolution uploads
+  attachments: string[] | null;   
+  evidence_urls: string[] | null; 
   lodger_id: string;
 }
 
@@ -124,7 +123,6 @@ const LodgerMaintenance = () => {
     try {
       // A. Upload Images
       if (selectedFiles.length > 0) {
-        // Upload files concurrently
         const uploadPromises = selectedFiles.map(async (file) => {
           const fileExt = file.name.split('.').pop();
           const fileName = `${activeTenancy.lodger_id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -155,7 +153,7 @@ const LodgerMaintenance = () => {
         subject: subject,
         description: description,
         complaint_category: category,
-        complaint_priority: priority,
+        priority: priority,
         complaint_status: 'pending',
         attachments: attachmentUrls.length > 0 ? attachmentUrls : null,
         created_at: new Date().toISOString()
@@ -211,7 +209,7 @@ const LodgerMaintenance = () => {
       />
 
       <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-6 pb-24 md:pb-6">
+        <div className="container mx-auto px-4 py-6">
           
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
@@ -260,7 +258,7 @@ const LodgerMaintenance = () => {
                           
                           <p className="text-sm text-muted-foreground line-clamp-2 mb-3 whitespace-pre-wrap">{item.description}</p>
                           
-                          {/* 1. Lodger's Attachments (Your Uploads) */}
+                          {/* Attachments & Evidence */}
                           {item.attachments && item.attachments.length > 0 && (
                             <div className="mb-3">
                                 <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">My Evidence</p>
@@ -274,7 +272,6 @@ const LodgerMaintenance = () => {
                             </div>
                           )}
 
-                          {/* 2. Staff Resolution Evidence (Proof of Fix) */}
                           {item.evidence_urls && item.evidence_urls.length > 0 && (
                             <div className="mb-3 p-2 bg-green-50/50 border border-green-100 rounded-md">
                                 <p className="text-[10px] uppercase font-bold text-green-700 mb-1 flex items-center gap-1">
@@ -291,8 +288,8 @@ const LodgerMaintenance = () => {
                           )}
 
                           <div className="flex items-center gap-2 mt-2 pt-2 border-t">
-                            <Badge variant="outline" className={getPriorityBadge(item.complaint_priority)}>
-                                {item.complaint_priority}
+                            <Badge variant="outline" className={getPriorityBadge(item.priority)}>
+                                {item.priority || "Normal"}
                             </Badge>
                             <span className="text-[10px] text-muted-foreground bg-secondary px-2 py-0.5 rounded capitalize">
                                 {item.complaint_category}
@@ -314,7 +311,7 @@ const LodgerMaintenance = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {/* Subject & Priority */}
+                  {/* Subject */}
                   <div className="grid grid-cols-1 gap-4">
                     <div className="space-y-2">
                         <Label>Subject</Label>
@@ -395,7 +392,7 @@ const LodgerMaintenance = () => {
                         type="file" 
                         ref={fileInputRef} 
                         className="hidden" 
-                        multiple // ✅ Enabled multiple
+                        multiple 
                         accept="image/*"
                         onChange={handleFileSelect}
                       />
@@ -418,12 +415,8 @@ const LodgerMaintenance = () => {
               </CardContent>
             </Card>
           </div>
-
-          <div className="h-20 md:h-0"></div>
         </div>
       </div>
-
-      <BottomNav role="lodger" />
     </>
   );
 };
