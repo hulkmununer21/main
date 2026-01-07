@@ -27,7 +27,7 @@ const Login = () => {
     setLoading(true);
     setError(null);
     try {
-      await login(form.email, form.password);
+      await login(form.email, form.password, userType as "lodger" | "landlord");
     } catch (err) {
       if (err instanceof Error) setError(err.message);
       else setError("Login failed");
@@ -190,13 +190,17 @@ const Login = () => {
                       </Link>
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      Staff or Admin?{" "}
+                      Staff, Admin or Service User?{" "}
                       <Link to="/staff-login" className="text-accent hover:underline font-medium">
-                        Staff Login
+                        Staff
                       </Link>
                       {" / "}
                       <Link to="/admin-login" className="text-accent hover:underline font-medium">
-                        Admin Login
+                        Admin
+                      </Link>
+                      {" / "}
+                      <Link to="/serviceuser-login" className="text-accent hover:underline font-medium">
+                        Service User
                       </Link>
                     </p>
                   </div>

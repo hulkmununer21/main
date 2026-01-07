@@ -51,7 +51,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, expectedRole?: User["role"]) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error || !data.user) {
       toast.error("Invalid email or password.");
@@ -71,6 +71,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (!role) {
       toast.error("No role assigned to this user.");
       throw new Error("No role assigned to this user.");
+    }
+
+    // Validate role if expectedRole is provided
+    if (expectedRole && role !== expectedRole) {
+      await supabase.auth.signOut();
+      const roleNames: Record<User["role"], string> = {
+        admin: "Administrators",
+        staff: "Staff Members",
+        landlord: "Landlords",
+        lodger: "Lodgers",
+        service_user: "Service Users"
+      };
+      toast.error(`Access Denied: This portal is for ${roleNames[expectedRole]} only. Please use the correct login page.`);
+      throw new Error(`Access denied: Expected ${expectedRole} role, but user has ${role} role.`);
     }
 
     // Fetch profile

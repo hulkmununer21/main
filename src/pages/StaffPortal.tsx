@@ -9,8 +9,6 @@ import { useAuth } from "@/contexts/useAuth";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
 import { cn } from "@/lib/utils";
-import { useIsMobile } from "@/hooks/use-mobile";
-import StaffOverview from "./staff/StaffOverview";
 import StaffDashboard from "./staff/StaffDashboard";
 import StaffProperties from "./staff/StaffProperties";
 import StaffBinDuties from "./staff/StaffBinDuties";
@@ -23,13 +21,7 @@ import StaffProfile from "./staff/StaffProfile";
 
 const StaffPortal = () => {
   const { logout, user } = useAuth();
-  const isMobile = useIsMobile();
   const [currentTab, setCurrentTab] = useState("dashboard");
-
-  // Mobile users get the mobile experience
-  if (isMobile) {
-    return <StaffOverview />;
-  }
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },

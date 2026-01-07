@@ -14,9 +14,14 @@ const StaffLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    login(email, password);
+    try {
+      await login(email, password, 'staff');
+    } catch (error) {
+      // Error is already handled by AuthContext with toast
+      console.error('Staff login failed:', error);
+    }
   };
 
   return (

@@ -14,9 +14,14 @@ const AdminLogin = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    login(email, password);
+    try {
+      await login(email, password, 'admin');
+    } catch (error) {
+      // Error is already handled by AuthContext with toast
+      console.error('Admin login failed:', error);
+    }
   };
 
   return (

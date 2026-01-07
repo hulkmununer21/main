@@ -118,11 +118,11 @@ export interface User {
 
 export interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, expectedRole?: User["role"]) => Promise<void>;
   signup: (
-    email: string, 
-    password: string, 
-    role: "lodger" | "landlord", 
+    email: string,
+    password: string,
+    role: "lodger" | "landlord",
     profileData: { full_name: string; phone?: string; [key: string]: unknown }
   ) => Promise<void>;
   logout: () => void;
