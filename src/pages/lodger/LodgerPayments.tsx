@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, User, LogOut, Download, Check, Clock, XCircle } from "lucide-react";
+import { Bell, LogOut, Download, Check, Clock, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useAuth } from "@/contexts/useAuth";
@@ -8,8 +8,9 @@ import logo from "@/assets/logo.png";
 import { Badge } from "@/components/ui/badge";
 import { BottomNav } from "@/components/mobile/BottomNav";
 import { LodgerProfile } from "@/contexts/AuthContextTypes";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
+import { format, parseISO } from "date-fns";
 
 const LodgerPayments = () => {
   const { logout, user } = useAuth();
@@ -18,20 +19,21 @@ const LodgerPayments = () => {
 
   const lodgerProfile = user?.profile as LodgerProfile;
 
+  // ✅ Updated Interface to match Supabase Join Response
   interface Payment {
     id: string;
-    amount_paid: number;
+    amount: number; // Changed from amount_paid to amount to match standard schema usually
     payment_date: string;
     payment_status: string;
     payment_method?: string;
-    reference?: string;
     payment_reference?: string;
-    property?: {
+    // Relations
+    properties?: {
       property_name: string;
-    };
-    room?: {
+    } | null;
+    rooms?: {
       room_number: string;
-    };
+    } | null;
   }
 
   useEffect(() => {
@@ -40,21 +42,22 @@ const LodgerPayments = () => {
 
       try {
         setLoading(true);
+        // ✅ Updated Query to fetch related Property and Room names
         const { data, error } = await supabase
           .from('payments')
-          .select('*')
+          .select(`
+            *,
+            properties (property_name),
+            rooms (room_number)
+          `)
           .eq('lodger_id', lodgerProfile.id)
           .order('payment_date', { ascending: false });
         
         if (error) {
           console.error("Error fetching payments:", error);
-          toast({
-            title: "Error Loading Payments",
-            description: "Could not load payment history. Please try again.",
-            variant: "destructive",
-          });
+          toast.error("Could not load payment history.");
         } else {
-          setPayments(data || []);
+          setPayments(data as unknown as Payment[] || []);
         }
       } catch (error) {
         console.error("Error fetching payments:", error);
@@ -67,37 +70,23 @@ const LodgerPayments = () => {
   }, [lodgerProfile?.id]);
 
   const getPaymentStatusBadge = (status: string) => {
-    switch (status) {
+    switch (status?.toLowerCase()) {
       case 'paid':
-        return (
-          <Badge variant="outline" className="text-green-600 border-green-600">
-            <Check className="h-3 w-3 mr-1" />
-            Paid
-          </Badge>
-        );
+      case 'completed':
+        return <Badge variant="outline" className="text-green-600 border-green-600 bg-green-50"><Check className="h-3 w-3 mr-1" /> Paid</Badge>;
       case 'pending':
-        return (
-          <Badge variant="outline" className="text-yellow-600 border-yellow-600">
-            <Clock className="h-3 w-3 mr-1" />
-            Pending
-          </Badge>
-        );
+        return <Badge variant="outline" className="text-yellow-600 border-yellow-600 bg-yellow-50"><Clock className="h-3 w-3 mr-1" /> Pending</Badge>;
       case 'overdue':
-        return (
-          <Badge variant="outline" className="text-red-600 border-red-600">
-            <XCircle className="h-3 w-3 mr-1" />
-            Overdue
-          </Badge>
-        );
+        return <Badge variant="outline" className="text-red-600 border-red-600 bg-red-50"><XCircle className="h-3 w-3 mr-1" /> Overdue</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline" className="capitalize">{status}</Badge>;
     }
   };
 
   return (
     <>
       <SEO 
-        title="Payments - Lodger Portal - Domus Dwell Manage"
+        title="Payments - Lodger Portal"
         description="View your payment history and manage rent payments"
       />
 
@@ -109,7 +98,7 @@ const LodgerPayments = () => {
               <img src={logo} alt="Logo" className="h-10 w-10 rounded-lg" />
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Payments</h1>
-                <p className="text-sm text-muted-foreground">View your payment history</p>
+                <p className="text-sm text-muted-foreground">Financial overview</p>
               </div>
             </div>
             <div className="flex gap-2">
@@ -123,51 +112,62 @@ const LodgerPayments = () => {
           </div>
 
           {/* Payment History */}
-          <Card className="border-border">
+          <Card className="border-border shadow-sm">
             <CardHeader>
               <CardTitle>Payment History</CardTitle>
-              <CardDescription>View all your rent payment records</CardDescription>
+              <CardDescription>View all your transaction records</CardDescription>
             </CardHeader>
             <CardContent>
               {loading ? (
-                <p className="text-muted-foreground">Loading payment history...</p>
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                    <Clock className="h-8 w-8 animate-spin mb-2 opacity-50" />
+                    <p>Loading history...</p>
+                </div>
               ) : payments.length === 0 ? (
-                <p className="text-muted-foreground">No payment records found.</p>
+                <div className="text-center py-8 border-2 border-dashed rounded-lg">
+                    <p className="text-muted-foreground">No payment records found.</p>
+                </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {payments.map((payment) => (
                     <div
                       key={payment.id}
-                      className="flex items-center justify-between p-4 border border-border rounded-lg hover:shadow-elegant transition-all"
+                      className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/40 transition-all gap-4 bg-card"
                     >
-                      <div className="flex-1">
-                        <p className="font-medium">
-                          {payment.payment_date 
-                            ? new Date(payment.payment_date).toLocaleDateString('en-GB', { 
-                                day: '2-digit', 
-                                month: 'short', 
-                                year: 'numeric' 
-                              })
-                            : "N/A"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {payment.payment_method || "N/A"} • {payment.payment_reference || "No reference"}
-                        </p>
-                        {payment.property?.property_name && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {payment.property.property_name} - Room {payment.room?.room_number || "N/A"}
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-2">
+                            <span className="font-semibold text-foreground">
+                            {payment.payment_date 
+                                ? format(parseISO(payment.payment_date), 'dd MMM yyyy')
+                                : "Date N/A"}
+                            </span>
+                            {getPaymentStatusBadge(payment.payment_status)}
+                        </div>
+                        
+                        <div className="text-sm text-muted-foreground flex flex-col sm:flex-row sm:gap-4">
+                            <span>Ref: {payment.payment_reference || "N/A"}</span>
+                            <span className="hidden sm:inline">•</span>
+                            <span>{payment.payment_method || "Bank Transfer"}</span>
+                        </div>
+
+                        {(payment.properties?.property_name || payment.rooms?.room_number) && (
+                          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                            <BuildingIcon className="h-3 w-3"/>
+                            {payment.properties?.property_name || "Unknown Property"} 
+                            {payment.rooms?.room_number ? ` (Room ${payment.rooms.room_number})` : ""}
                           </p>
                         )}
                       </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-lg">
-                          £{payment.amount_paid?.toFixed(2) || "0.00"}
+
+                      <div className="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-t-0 pt-3 sm:pt-0">
+                        <p className="font-bold text-lg">
+                          £{Number(payment.amount).toFixed(2)}
                         </p>
-                        {getPaymentStatusBadge(payment.payment_status)}
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                          <Download className="h-4 w-4" />
+                          <span className="sr-only">Download</span>
+                        </Button>
                       </div>
-                      <Button variant="ghost" size="sm" className="ml-4" title="Download Receipt">
-                        <Download className="h-4 w-4" />
-                      </Button>
                     </div>
                   ))}
                 </div>
@@ -185,5 +185,10 @@ const LodgerPayments = () => {
     </>
   );
 };
+
+// Helper Icon Component
+const BuildingIcon = ({ className }: { className?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M8 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M16 14h.01"/></svg>
+);
 
 export default LodgerPayments;

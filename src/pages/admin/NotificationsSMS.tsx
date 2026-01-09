@@ -43,6 +43,7 @@ interface Message {
   content: string;
   created_at: string;
   attachments?: { name: string; type: string; url: string }[];
+  is_read?: boolean; // Added for signal logic
 }
 
 interface SentNotification {
@@ -50,7 +51,7 @@ interface SentNotification {
   recipient_id: string;
   notification_type: string;
   message_body: string;
-  subject?: string; // Added subject to type
+  subject?: string;
   created_at: string;
   status: string;
   metadata?: any;
@@ -66,6 +67,9 @@ const NotificationsSMS = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   
+  // ✅ NEW: State for Unread Signals
+  const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(new Set());
+
   // --- HISTORY STATE ---
   const [notificationHistory, setNotificationHistory] = useState<SentNotification[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -87,7 +91,7 @@ const NotificationsSMS = () => {
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
   const [broadcastChannel, setBroadcastChannel] = useState<"in_app" | "sms" | "email">("in_app"); 
   const [broadcastRecipients, setBroadcastRecipients] = useState<string[]>([]);
-  const [broadcastSubject, setBroadcastSubject] = useState(""); // ✅ Added Subject State
+  const [broadcastSubject, setBroadcastSubject] = useState(""); 
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [broadcastSearchTerm, setBroadcastSearchTerm] = useState("");
 
@@ -136,6 +140,19 @@ const NotificationsSMS = () => {
         if (error) throw error;
         setThreads(threadData || []);
 
+        // C. ✅ NEW: Fetch Unread Status for Threads
+        // Get all unread messages that were NOT sent by me
+        const { data: unreadData } = await supabase
+            .from('messages')
+            .select('thread_id')
+            .eq('is_read', false)
+            .neq('sender_id', user.id);
+        
+        if (unreadData && unreadData.length > 0) {
+            const ids = new Set(unreadData.map(m => m.thread_id));
+            setUnreadThreadIds(ids);
+        }
+
       } catch (error) {
         console.error("Init Error:", error);
         toast.error("Failed to load messaging system.");
@@ -146,9 +163,10 @@ const NotificationsSMS = () => {
 
     initData();
 
-    // C. Realtime Inbox Listener
-    const threadSubscription = supabase
-      .channel('public:message_threads')
+    // D. Realtime Listeners (Merged)
+    const channel = supabase
+      .channel('admin_messaging_global')
+      // Listener 1: Update Thread List Order
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_threads' }, () => {
          if(user) {
              supabase.from('message_threads')
@@ -158,9 +176,17 @@ const NotificationsSMS = () => {
              .then(({ data }) => setThreads(data || []));
          }
       })
+      // Listener 2: ✅ Update Unread Signal
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+          const newMsg = payload.new as Message;
+          // If message is NOT from me, mark thread as unread
+          if (newMsg.sender_id !== user?.id) {
+              setUnreadThreadIds(prev => new Set(prev).add(newMsg.thread_id));
+          }
+      })
       .subscribe();
 
-    return () => { supabase.removeChannel(threadSubscription); };
+    return () => { supabase.removeChannel(channel); };
   }, [user]);
 
   // --- 2. FETCH HISTORY ---
@@ -170,7 +196,7 @@ const NotificationsSMS = () => {
             const { data } = await supabase
                 .from('notifications')
                 .select('*')
-                .eq('subject', 'Admin Notification') // Or filter by metadata if needed
+                .eq('subject', 'Admin Notification') 
                 .order('created_at', { ascending: false })
                 .limit(50);
             
@@ -181,37 +207,55 @@ const NotificationsSMS = () => {
   }, [isHistoryOpen]);
 
   // --- 3. CHAT LOGIC ---
-  useEffect(() => {
-    if (!activeThreadId) return;
+  
+  // ✅ UPDATED: Open Thread and Clear Unread Signal
+  const openThread = async (threadId: string) => {
+    setActiveThreadId(threadId);
+    
+    // Clear local unread signal
+    setUnreadThreadIds(prev => {
+        const next = new Set(prev);
+        next.delete(threadId);
+        return next;
+    });
 
-    const fetchMessages = async () => {
-      const { data } = await supabase
+    // Mark as read in DB
+    if(user) {
+        await supabase.from('messages')
+            .update({ is_read: true })
+            .eq('thread_id', threadId)
+            .neq('sender_id', user.id);
+    }
+
+    const { data } = await supabase
         .from('messages')
         .select('*')
-        .eq('thread_id', activeThreadId)
+        .eq('thread_id', threadId)
         .order('created_at', { ascending: true });
       
-      setMessages(data || []);
-      scrollToBottom();
-    };
+    setMessages(data || []);
+    scrollToBottom();
 
-    fetchMessages();
-
+    // Subscribe to this specific thread
     const messageSub = supabase
-      .channel(`chat:${activeThreadId}`)
+      .channel(`chat:${threadId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
         table: 'messages', 
-        filter: `thread_id=eq.${activeThreadId}` 
+        filter: `thread_id=eq.${threadId}` 
       }, (payload) => {
         setMessages((prev) => [...prev, payload.new as Message]);
         scrollToBottom();
+        // If I am active on this thread, keep marking new incoming messages as read
+        if (payload.new.sender_id !== user?.id) {
+             supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
+        }
       })
       .subscribe();
 
     return () => { supabase.removeChannel(messageSub); };
-  }, [activeThreadId]);
+  };
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -311,7 +355,7 @@ const NotificationsSMS = () => {
         const found = existing?.find(t => t.participants.length === 2 && t.participants.includes(user.id) && t.participants.includes(recipientId));
 
         if (found) {
-            setActiveThreadId(found.id);
+            openThread(found.id); // ✅ Use openThread to handle logic
             setIsNewChatOpen(false);
             setUploading(false);
             return;
@@ -328,7 +372,7 @@ const NotificationsSMS = () => {
 
         if (data) {
             setThreads(prev => [data, ...prev]);
-            setActiveThreadId(data.id);
+            openThread(data.id); // ✅ Use openThread
             setIsNewChatOpen(false);
         }
     } catch (e: any) {
@@ -348,16 +392,15 @@ const NotificationsSMS = () => {
     try {
         const payloads = broadcastRecipients.map(uid => ({
             recipient_id: uid,
-            // ✅ Use explicit subject for Email/In-App, or prefix for SMS if backend handles it
             subject: broadcastSubject || "Admin Notification",
             message_body: broadcastMessage,
-            notification_type: 'in_app', // Stored as generic, Edge Function reads metadata
+            notification_type: 'in_app',
             priority: 'high',
             metadata: {
                 channel: broadcastChannel, 
                 sent_by: user?.id,
                 target_role: userDirectory[uid]?.role,
-                original_subject: broadcastSubject // Store explicitly for email handlers
+                original_subject: broadcastSubject 
             }
         }));
 
@@ -513,7 +556,7 @@ const NotificationsSMS = () => {
                             <p className="text-xs text-right text-muted-foreground mt-1">{broadcastRecipients.length} recipients selected</p>
                         </div>
                         
-                        {/* ✅ SUBJECT FIELD */}
+                        {/* Subject Field */}
                         <div className="space-y-2">
                             <Label>
                                 {broadcastChannel === 'email' ? "Subject *" : 
@@ -599,15 +642,26 @@ const NotificationsSMS = () => {
             threads.map((thread) => {
               const otherUser = getOtherParticipant(thread);
               const isActive = activeThreadId === thread.id;
+              // ✅ UI: Check if this thread has an unread signal
+              const isUnread = unreadThreadIds.has(thread.id);
+
               return (
-                <button key={thread.id} onClick={() => setActiveThreadId(thread.id)} className={`flex items-start gap-3 p-4 text-left border-b transition-colors hover:bg-muted/50 ${isActive ? 'bg-primary/5 border-l-4 border-l-primary' : ''}`}>
+                // ✅ UI: Updated logic to open thread properly
+                <button key={thread.id} onClick={() => openThread(thread.id)} className={`flex items-start gap-3 p-4 text-left border-b transition-colors hover:bg-muted/50 ${isActive ? 'bg-primary/5 border-l-4 border-l-primary' : ''}`}>
                   <Avatar><AvatarImage /><AvatarFallback>{otherUser?.name?.charAt(0)}</AvatarFallback></Avatar>
                   <div className="flex-1 overflow-hidden">
                     <div className="flex justify-between items-center mb-1">
-                      <span className="font-medium truncate">{otherUser?.name || "Unknown"}</span>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{formatDistanceToNow(parseISO(thread.updated_at), { addSuffix: true })}</span>
+                      {/* ✅ UI: Bold text if unread */}
+                      <span className={`truncate ${isUnread ? 'font-bold text-foreground' : 'font-medium'}`}>{otherUser?.name || "Unknown"}</span>
+                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatDistanceToNow(parseISO(thread.updated_at), { addSuffix: true })}</span>
                     </div>
-                    <p className="text-sm text-muted-foreground truncate">{thread.last_message_preview}</p>
+                    
+                    <div className="flex justify-between items-center">
+                        <p className={`text-sm truncate max-w-[180px] ${isUnread ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{thread.last_message_preview}</p>
+                        
+                        {/* ✅ UI: The Blue Dot Signal */}
+                        {isUnread && <div className="h-2.5 w-2.5 bg-blue-600 rounded-full shrink-0 animate-pulse" />}
+                    </div>
                   </div>
                 </button>
               );
