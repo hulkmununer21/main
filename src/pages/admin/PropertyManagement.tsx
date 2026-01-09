@@ -10,7 +10,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users } from "lucide-react";
+import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users, LogOut } from "lucide-react";
+import { format, parseISO } from "date-fns";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 interface Property {
   id: string;
@@ -86,6 +88,21 @@ interface StaffAssignment {
   is_primary?: boolean;
   notes?: string;
   staff?: StaffProfile;
+}
+
+// ✅ NEW INTERFACE FOR TENANCY
+interface Tenancy {
+  id: string;
+  lodger_id: string;
+  property_id: string;
+  room_id: string;
+  start_date: string;
+  end_date?: string;
+  monthly_rent: number;
+  tenancy_status: 'active' | 'pending' | 'ended' | 'evicted';
+  lodger?: { full_name: string; email: string };
+  property?: { property_name: string };
+  room?: { room_number: string };
 }
 
 export default function PropertyManagement() {
@@ -174,6 +191,13 @@ export default function PropertyManagement() {
   const [lodgers, setLodgers] = useState<Array<{ id: string; full_name: string; email: string }>>([]);
   const [availableRooms, setAvailableRooms] = useState<Room[]>([]);
 
+  // ✅ NEW TENANCY MANAGEMENT STATE
+  const [tenancies, setTenancies] = useState<Tenancy[]>([]);
+  const [manageTenancyOpen, setManageTenancyOpen] = useState(false);
+  const [selectedTenancy, setSelectedTenancy] = useState<Tenancy | null>(null);
+  const [vacateDate, setVacateDate] = useState("");
+  const [deleteTenancyOpen, setDeleteTenancyOpen] = useState(false);
+
   // Utility to auto-generate payment reference
   const generatePaymentReference = (latestNumber: number = 1): string => {
     const now = new Date();
@@ -188,6 +212,7 @@ export default function PropertyManagement() {
     loadProperties();
     loadLandlords();
     loadStaff();
+    loadTenancies(); // ✅ NEW: Load Tenancies on mount
   }, []);
 
   // Load lodgers for tenancy selection
@@ -293,7 +318,6 @@ export default function PropertyManagement() {
 
   const loadPropertyRooms = async (propertyId: string) => {
     try {
-      // Fetch all rooms for the property
       const { data: rooms, error } = await supabase
         .from('rooms')
         .select('*')
@@ -307,7 +331,6 @@ export default function PropertyManagement() {
         return;
       }
 
-      // Fetch active or pending tenancies for these rooms
       const { data: tenancies, error: tenErr } = await supabase
         .from('tenancies')
         .select('id, room_id, lodger_id, tenancy_status')
@@ -315,7 +338,6 @@ export default function PropertyManagement() {
         .in('tenancy_status', ['active', 'pending']);
       if (tenErr) throw tenErr;
 
-      // Fetch lodger profiles for these tenancies
       const lodgerIds = (tenancies || []).map((t: any) => t.lodger_id);
       let lodgers: any[] = [];
       if (lodgerIds.length > 0) {
@@ -329,7 +351,6 @@ export default function PropertyManagement() {
       const lodgerMap = new Map<string, string>();
       lodgers.forEach(l => lodgerMap.set(l.id, l.full_name));
 
-      // Map roomId to tenant name
       const roomTenantMap = new Map<string, string>();
       (tenancies || []).forEach(t => {
         if (t.room_id && t.lodger_id && lodgerMap.has(t.lodger_id)) {
@@ -337,7 +358,6 @@ export default function PropertyManagement() {
         }
       });
 
-      // Add tenantName to each room
       const roomsWithTenant = (rooms || []).map((room: any) => ({
         ...room,
         tenantName: roomTenantMap.get(room.id) || null,
@@ -364,7 +384,6 @@ export default function PropertyManagement() {
 
   const loadAssignments = async () => {
     try {
-      // Always reload staff before mapping assignments
       const { data: staffData, error: staffError } = await supabase
         .from('staff_profiles')
         .select('id, user_id, full_name, email, position')
@@ -385,6 +404,26 @@ export default function PropertyManagement() {
       setAssignments(assignmentsWithStaff);
     } catch (error) {
       console.error('Error loading assignments:', error);
+    }
+  };
+
+  // ✅ NEW LOADER: TENANCIES
+  const loadTenancies = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('tenancies')
+        .select(`
+          *,
+          lodger:lodger_profiles(full_name, email),
+          property:properties(property_name),
+          room:rooms(room_number)
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      setTenancies(data as any);
+    } catch (error) {
+      console.error("Error loading tenancies:", error);
     }
   };
 
@@ -702,7 +741,6 @@ export default function PropertyManagement() {
         return;
       }
       
-      // Insert tenancy
       const { data: tenancy, error: tenancyErr } = await supabase
         .from('tenancies')
         .insert({
@@ -719,13 +757,11 @@ export default function PropertyManagement() {
         .single();
       if (tenancyErr) throw tenancyErr;
 
-      // Update room status to occupied
       await supabase
         .from('rooms')
         .update({ room_status: 'occupied' })
         .eq('id', tenancyForm.room_id);
 
-      // Generate payment reference
       const today = new Date();
       const yyyy = today.getFullYear();
       const mm = String(today.getMonth() + 1).padStart(2, '0');
@@ -742,7 +778,6 @@ export default function PropertyManagement() {
       }
       const paymentReference = generatePaymentReference(latestNumber);
 
-      // Insert initial rent payment
       await supabase.from('payments').insert({
         lodger_id: tenancyForm.lodger_id,
         tenancy_id: tenancy.id,
@@ -756,7 +791,6 @@ export default function PropertyManagement() {
         payment_reference: paymentReference,
       });
 
-      // Insert deposit payment if applicable
       if (tenancyForm.deposit_amount > 0) {
         const depositReference = generatePaymentReference(latestNumber + 1);
         await supabase.from('payments').insert({
@@ -773,7 +807,6 @@ export default function PropertyManagement() {
         });
       }
 
-      // Notify lodger
       await supabase.from('notifications').insert({
         recipient_id: tenancyForm.lodger_id,
         notification_type: 'in_app',
@@ -796,6 +829,7 @@ export default function PropertyManagement() {
         end_date: '',
       });
       loadProperties();
+      loadTenancies(); // Refresh tenancy list
     } catch (error) {
       console.error('Error assigning tenancy:', error);
       toast.error('Failed to assign tenancy');
@@ -854,6 +888,49 @@ export default function PropertyManagement() {
 
   const removeRoomImage = (url: string) => {
     setRoomForm({ ...roomForm, images: (roomForm.images || []).filter(u => u !== url) });
+  };
+
+  // ✅ NEW TENANCY MANAGEMENT HANDLERS
+  const handleManageTenancy = (t: Tenancy) => {
+    setSelectedTenancy(t);
+    setVacateDate(new Date().toISOString().split('T')[0]);
+    setManageTenancyOpen(true);
+  };
+
+  const handleUpdateTenancyStatus = async (status: string) => {
+    if (!selectedTenancy) return;
+    setSubmitting(true);
+    try {
+        await supabase.from('tenancies').update({ tenancy_status: status }).eq('id', selectedTenancy.id);
+        toast.success(`Status updated`);
+        setManageTenancyOpen(false);
+        loadTenancies();
+    } catch(e) { toast.error("Update failed"); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleVacateRoom = async () => {
+    if (!selectedTenancy) return;
+    setSubmitting(true);
+    try {
+        await supabase.from('tenancies').update({ tenancy_status: 'ended', end_date: vacateDate }).eq('id', selectedTenancy.id);
+        await supabase.from('rooms').update({ room_status: 'available' }).eq('id', selectedTenancy.room_id);
+        toast.success("Room vacated");
+        setManageTenancyOpen(false);
+        loadTenancies();
+        loadProperties();
+    } catch(e) { toast.error("Vacate failed"); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleDeleteTenancyConfirm = async () => {
+    if (!selectedTenancy) return;
+    try {
+        await supabase.from('tenancies').delete().eq('id', selectedTenancy.id);
+        toast.success("Record removed");
+        setDeleteTenancyOpen(false);
+        loadTenancies();
+    } catch(e) { toast.error("Delete failed"); }
   };
 
   const filteredProperties = properties.filter((property) => {
@@ -923,6 +1000,7 @@ export default function PropertyManagement() {
         </Button>
       </div>
 
+      {/* --- SECTION 1: PROPERTIES (Existing) --- */}
       <Card>
         <CardHeader>
           <CardTitle>Properties</CardTitle>
@@ -994,6 +1072,98 @@ export default function PropertyManagement() {
           </div>
         </CardContent>
       </Card>
+
+      {/* --- SECTION 2: TENANCY RECORDS (NEW TABLE BELOW PROPERTIES) --- */}
+      <Card>
+        <CardHeader>
+            <CardTitle>Tenancy Records</CardTitle>
+            <CardDescription>Manage active leases and move-outs</CardDescription>
+        </CardHeader>
+        <CardContent>
+            <div className="rounded-md border">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Lodger</TableHead>
+                            <TableHead>Property</TableHead>
+                            <TableHead>Room</TableHead>
+                            <TableHead>Start Date</TableHead>
+                            <TableHead>End Date</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {tenancies.length === 0 ? (
+                            <TableRow><TableCell colSpan={7} className="text-center py-4 text-muted-foreground">No tenancies found.</TableCell></TableRow>
+                        ) : tenancies.map((t) => (
+                            <TableRow key={t.id}>
+                                <TableCell className="font-medium">{t.lodger?.full_name}</TableCell>
+                                <TableCell>{t.property?.property_name}</TableCell>
+                                <TableCell>{t.room?.room_number}</TableCell>
+                                <TableCell>{format(parseISO(t.start_date), 'dd MMM yyyy')}</TableCell>
+                                <TableCell>{t.end_date ? format(parseISO(t.end_date), 'dd MMM yyyy') : <span className="text-muted-foreground italic">Ongoing</span>}</TableCell>
+                                <TableCell><Badge variant={t.tenancy_status === 'active' ? 'default' : t.tenancy_status === 'ended' ? 'secondary' : 'destructive'}>{t.tenancy_status}</Badge></TableCell>
+                                <TableCell className="text-right space-x-2">
+                                    <Button size="sm" variant="outline" onClick={() => handleManageTenancy(t)}>Manage</Button>
+                                    <Button size="sm" variant="ghost" className="text-red-500" onClick={() => { setSelectedTenancy(t); setDeleteTenancyOpen(true); }}><Trash2 className="w-4 h-4" /></Button>
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </div>
+        </CardContent>
+      </Card>
+
+      {/* ✅ NEW MANAGE TENANCY DIALOG */}
+      <Dialog open={manageTenancyOpen} onOpenChange={setManageTenancyOpen}>
+        <DialogContent>
+            <DialogHeader><DialogTitle>Manage Tenancy</DialogTitle><DialogDescription>Update status or vacate room.</DialogDescription></DialogHeader>
+            <div className="py-4 space-y-6">
+                <div className="bg-muted p-3 rounded text-sm grid grid-cols-2 gap-2">
+                    <p><strong>Lodger:</strong> {selectedTenancy?.lodger?.full_name}</p>
+                    <p><strong>Status:</strong> {selectedTenancy?.tenancy_status}</p>
+                    <p><strong>Room:</strong> {selectedTenancy?.room?.room_number}</p>
+                    <p><strong>Property:</strong> {selectedTenancy?.property?.property_name}</p>
+                </div>
+
+                {selectedTenancy?.tenancy_status === 'active' && (
+                    <div className="space-y-2 border-t pt-4">
+                        <Label className="text-red-600 font-semibold flex items-center gap-2"><LogOut className="w-4 h-4"/> Vacate Room</Label>
+                        <p className="text-xs text-muted-foreground">Ends tenancy and marks room as Available.</p>
+                        <div className="flex gap-2 items-end">
+                            <div className="flex-1"><Label>Move Out Date</Label><Input type="date" value={vacateDate} onChange={e => setVacateDate(e.target.value)} /></div>
+                            <Button variant="destructive" onClick={handleVacateRoom} disabled={submitting}>Confirm Vacate</Button>
+                        </div>
+                    </div>
+                )}
+
+                <div className="space-y-2 border-t pt-4">
+                    <Label>Manual Status</Label>
+                    <div className="flex gap-2">
+                        <Button size="sm" variant="outline" disabled={selectedTenancy?.tenancy_status === 'active'} onClick={() => handleUpdateTenancyStatus('active')}>Set Active</Button>
+                        <Button size="sm" variant="outline" disabled={selectedTenancy?.tenancy_status === 'pending'} onClick={() => handleUpdateTenancyStatus('pending')}>Set Pending</Button>
+                        <Button size="sm" variant="outline" disabled={selectedTenancy?.tenancy_status === 'evicted'} onClick={() => handleUpdateTenancyStatus('evicted')} className="text-red-600 hover:text-red-700">Evict</Button>
+                    </div>
+                </div>
+            </div>
+            <DialogFooter><Button variant="ghost" onClick={() => setManageTenancyOpen(false)}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ NEW DELETE TENANCY CONFIRM */}
+      <AlertDialog open={deleteTenancyOpen} onOpenChange={setDeleteTenancyOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader><AlertDialogTitle>Delete Record?</AlertDialogTitle><AlertDialogDescription>This removes the tenancy history.</AlertDialogDescription></AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction className="bg-red-600" onClick={handleDeleteTenancyConfirm}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* --- ALL ORIGINAL DIALOGS FOLLOW --- */}
 
       <Dialog open={propertyDialogOpen} onOpenChange={setPropertyDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -1371,7 +1541,6 @@ export default function PropertyManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* Tenancy Assignment Dialog */}
       <Dialog open={tenancyDialogOpen} onOpenChange={setTenancyDialogOpen}>
         <DialogContent className="max-w-xl">
           <DialogHeader>

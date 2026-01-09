@@ -1,93 +1,167 @@
+import { useState, useEffect } from "react";
+import { 
+  DollarSign, CheckCircle, AlertCircle, Loader2, Calendar as CalendarIcon, FileText, Zap, Search, Pencil
+} from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DollarSign, CreditCard, Zap, Droplet, Flame, FileText, CheckCircle, AlertCircle } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/contexts/useAuth";
+import { toast } from "sonner";
+import { format, parseISO, isPast, isSameMonth } from "date-fns";
+
+// === INTERFACES ===
+interface Payment {
+  id: string;
+  lodger_id: string;
+  property_id?: string;
+  room_id?: string;
+  payment_type: string;
+  amount: number;
+  payment_method?: string;
+  due_date: string | null;
+  payment_date?: string | null;
+  payment_status: 'pending' | 'completed' | 'cancelled' | 'failed' | 'overdue'; 
+  payment_reference?: string;
+  lodger_profiles?: { full_name: string };
+  properties?: { property_name: string };
+  rooms?: { room_number: string };
+}
 
 const PaymentsBilling = () => {
-  const payments = [
-    {
-      lodger: "Tom Brown",
-      property: "789 High St",
-      room: "Room 5",
-      type: "Rent",
-      amount: "£750.00",
-      dueDate: "2024-12-01",
-      paidDate: "2024-12-01",
-      status: "Paid",
-      method: "Bank Transfer"
-    },
-    {
-      lodger: "Lisa Green",
-      property: "123 Main St",
-      room: "Room 2",
-      type: "Rent",
-      amount: "£850.00",
-      dueDate: "2024-12-01",
-      paidDate: null,
-      status: "Overdue",
-      method: null
-    },
-    {
-      lodger: "Mark Johnson",
-      property: "456 River Rd",
-      room: "Room 3",
-      type: "Deposit",
-      amount: "£500.00",
-      dueDate: "2024-11-15",
-      paidDate: "2024-11-14",
-      status: "Paid",
-      method: "Card"
-    },
-    {
-      lodger: "Sophie Chen",
-      property: "321 Park Ave",
-      room: "Room 1",
-      type: "Utilities",
-      amount: "£120.00",
-      dueDate: "2024-12-05",
-      paidDate: null,
-      status: "Pending",
-      method: null
-    },
-  ];
+  const { user } = useAuth();
+  
+  // State
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({ received: 0, outstanding: 0, activeInvoices: 0 });
+  const [searchTerm, setSearchTerm] = useState("");
+  
+  // Modify Payment State
+  const [isModifyOpen, setIsModifyOpen] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
+  const [statusUpdate, setStatusUpdate] = useState<string>("pending");
+  const [paymentMethod, setPaymentMethod] = useState("Bank Transfer");
+  const [paymentRefInput, setPaymentRefInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const meterReadings = [
-    {
-      property: "123 Main St",
-      type: "Electricity",
-      lastReading: "45678",
-      date: "2024-11-30",
-      nextDue: "2024-12-30",
-      usage: "245 kWh",
-      cost: "£58.80"
-    },
-    {
-      property: "456 River Rd",
-      type: "Gas",
-      lastReading: "12345",
-      date: "2024-11-28",
-      nextDue: "2024-12-28",
-      usage: "180 units",
-      cost: "£45.00"
-    },
-    {
-      property: "789 High St",
-      type: "Water",
-      lastReading: "98765",
-      date: "2024-11-25",
-      nextDue: "2024-12-25",
-      usage: "15 m³",
-      cost: "£35.50"
-    },
-  ];
+  // --- 1. FETCH DATA ---
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-  const totalReceived = payments
-    .filter(p => p.status === "Paid")
-    .reduce((sum, p) => sum + parseFloat(p.amount.replace("£", "").replace(",", "")), 0);
+  const fetchData = async () => {
+    try {
+      setLoading(true);
 
-  const totalOutstanding = payments
-    .filter(p => p.status !== "Paid")
-    .reduce((sum, p) => sum + parseFloat(p.amount.replace("£", "").replace(",", "")), 0);
+      const { data, error } = await supabase
+        .from('payments')
+        .select(`*, lodger_profiles(full_name), properties(property_name), rooms(room_number)`)
+        .order('due_date', { ascending: false });
+
+      if (error) throw error;
+
+      const fetchedPayments = data as Payment[];
+      setPayments(fetchedPayments);
+
+      // B. Calculate Stats
+      const now = new Date();
+      let received = 0;
+      let outstanding = 0;
+
+      fetchedPayments.forEach(p => {
+        const val = Number(p.amount) || 0;
+        if (p.payment_status === 'completed') {
+          const dateToCheck = p.payment_date || (p as any).updated_at;
+          if (dateToCheck && isSameMonth(parseISO(dateToCheck), now)) received += val;
+        } else if (['pending', 'overdue'].includes(p.payment_status)) {
+          outstanding += val;
+        }
+      });
+
+      setStats({
+        received,
+        outstanding,
+        activeInvoices: fetchedPayments.filter(p => p.payment_status !== 'completed' && p.payment_status !== 'cancelled').length
+      });
+
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to load payments.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- ACTIONS ---
+
+  const handleOpenModify = (payment: Payment) => {
+    setSelectedPayment(payment);
+    setStatusUpdate(payment.payment_status);
+    setPaymentMethod(payment.payment_method || "Bank Transfer");
+    setPaymentRefInput(payment.payment_reference || "");
+    setIsModifyOpen(true);
+  };
+
+  const handleModifyPayment = async () => {
+    if (!selectedPayment) return;
+    setSubmitting(true);
+    try {
+      const updates: any = {
+        payment_status: statusUpdate,
+        updated_at: new Date().toISOString()
+      };
+
+      if (statusUpdate === 'completed') {
+        updates.payment_date = new Date().toISOString();
+        updates.payment_method = paymentMethod;
+        updates.payment_reference = paymentRefInput;
+      } else if(statusUpdate === 'pending') {
+        updates.payment_date = null;
+      }
+
+      const { error } = await supabase.from('payments').update(updates).eq('id', selectedPayment.id);
+        
+      if (error) throw error;
+      toast.success(`Payment marked as ${statusUpdate}`);
+      setIsModifyOpen(false);
+      fetchData();
+    } catch (err: any) { toast.error("Update failed: " + err.message); } finally { setSubmitting(false); }
+  };
+
+  // --- FILTER & HELPERS ---
+  const filteredPayments = payments.filter(p => {
+    const term = searchTerm.toLowerCase();
+    const lodger = p.lodger_profiles?.full_name?.toLowerCase() || "";
+    const ref = p.payment_reference?.toLowerCase() || "";
+    const prop = p.properties?.property_name?.toLowerCase() || "";
+    return lodger.includes(term) || ref.includes(term) || prop.includes(term);
+  });
+
+  const getStatusVariant = (p: Payment) => {
+    switch(p.payment_status) {
+        case 'completed': return 'default';
+        case 'cancelled': return 'secondary';
+        case 'failed': return 'destructive';
+        case 'pending':
+            if (p.due_date && isPast(parseISO(p.due_date)) && !isSameMonth(parseISO(p.due_date), new Date())) return 'destructive';
+            return 'outline';
+        default: return 'outline';
+    }
+  };
+
+  const getStatusLabel = (p: Payment) => {
+    if (p.payment_status === 'pending' && p.due_date) {
+        if (isPast(parseISO(p.due_date)) && !isSameMonth(parseISO(p.due_date), new Date())) return "Overdue";
+    }
+    return p.payment_status;
+  };
+
+  if (loading) return <div className="h-96 flex items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary"/></div>;
 
   return (
     <div className="space-y-6">
@@ -96,126 +170,62 @@ const PaymentsBilling = () => {
         <p className="text-muted-foreground">Manage rent, deposits, utilities, and payment tracking</p>
       </div>
 
-      {/* Financial Summary */}
-      <div className="grid md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-green-500/10 p-3 rounded-full">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">£{totalReceived.toLocaleString()}</p>
-                <p className="text-sm text-muted-foreground">Received This Month</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-destructive/10 p-3 rounded-full">
-                <AlertCircle className="w-5 h-5 text-destructive" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">£{totalOutstanding.toLocaleString()}</p>
-                <p className="text-sm text-muted-foreground">Outstanding</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary/10 p-3 rounded-full">
-                <DollarSign className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">£125,000</p>
-                <p className="text-sm text-muted-foreground">Monthly Revenue</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="bg-accent/10 p-3 rounded-full">
-                <FileText className="w-5 h-5 text-accent" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{payments.length}</p>
-                <p className="text-sm text-muted-foreground">Active Invoices</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Stats Cards */}
+      <div className="grid md:grid-cols-3 gap-4">
+        <Card><CardContent className="p-6 flex items-center gap-3"><div className="bg-green-100 p-3 rounded-full text-green-600"><CheckCircle className="w-5 h-5"/></div><div><p className="text-2xl font-bold">£{stats.received.toLocaleString()}</p><p className="text-sm text-muted-foreground">Received This Month</p></div></CardContent></Card>
+        <Card><CardContent className="p-6 flex items-center gap-3"><div className="bg-red-100 p-3 rounded-full text-red-600"><AlertCircle className="w-5 h-5"/></div><div><p className="text-2xl font-bold">£{stats.outstanding.toLocaleString()}</p><p className="text-sm text-muted-foreground">Total Outstanding</p></div></CardContent></Card>
+        <Card><CardContent className="p-6 flex items-center gap-3"><div className="bg-blue-100 p-3 rounded-full text-blue-600"><FileText className="w-5 h-5"/></div><div><p className="text-2xl font-bold">{stats.activeInvoices}</p><p className="text-sm text-muted-foreground">Active Invoices</p></div></CardContent></Card>
       </div>
 
-      {/* Payment Tracking */}
+      {/* Main List */}
       <Card>
         <CardHeader>
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>Payment Tracking</CardTitle>
-              <CardDescription>Monitor rent, deposits, and utility payments</CardDescription>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline">
-                <FileText className="w-4 h-4 mr-2" />
-                Generate Invoice
-              </Button>
-              <Button>
-                <DollarSign className="w-4 h-4 mr-2" />
-                Add Payment
-              </Button>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <CardTitle>Payment Tracking</CardTitle>
+            {/* Search Only - No "New Invoice" Button */}
+            <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="relative flex-1 md:w-64">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                </div>
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {payments.map((payment, index) => (
-              <Card key={index} className="border-border">
+            {filteredPayments.length === 0 ? <p className="text-center py-8 text-muted-foreground">No payments found.</p> : 
+            filteredPayments.map((payment) => (
+              <Card key={payment.id} className="border-border hover:bg-muted/5 transition-colors">
                 <CardContent className="p-4">
-                  <div className="flex items-start justify-between">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
-                        <h4 className="font-semibold">{payment.lodger}</h4>
-                        <Badge variant="outline">{payment.type}</Badge>
-                        <Badge variant={
-                          payment.status === "Paid" ? "default" :
-                          payment.status === "Overdue" ? "destructive" :
-                          "secondary"
-                        }>
-                          {payment.status}
-                        </Badge>
+                        <h4 className="font-semibold text-lg">{payment.lodger_profiles?.full_name || "Unknown"}</h4>
+                        <Badge variant="outline">{payment.payment_type}</Badge>
+                        <Badge variant={getStatusVariant(payment)} className="capitalize">{getStatusLabel(payment)}</Badge>
                       </div>
-                      <div className="grid md:grid-cols-2 gap-x-6 gap-y-1 text-sm text-muted-foreground">
-                        <p><span className="font-medium text-foreground">Property:</span> {payment.property}</p>
-                        <p><span className="font-medium text-foreground">Room:</span> {payment.room}</p>
-                        <p><span className="font-medium text-foreground">Amount:</span> <span className="text-lg font-bold text-primary">{payment.amount}</span></p>
-                        <p><span className="font-medium text-foreground">Due:</span> {payment.dueDate}</p>
-                        {payment.paidDate && (
-                          <>
-                            <p><span className="font-medium text-foreground">Paid:</span> {payment.paidDate}</p>
-                            <p><span className="font-medium text-foreground">Method:</span> {payment.method}</p>
-                          </>
+                      <div className="grid md:grid-cols-2 gap-x-8 gap-y-1 text-sm text-muted-foreground">
+                        <p><span className="font-medium text-foreground">Property:</span> {payment.properties?.property_name || 'N/A'}</p>
+                        
+                        <p><span className="font-medium text-foreground">Room:</span> {payment.rooms?.room_number ? `Room ${payment.rooms.room_number}` : 'N/A'}</p>
+                        
+                        <p><span className="font-medium text-foreground">Amount:</span> <span className="text-lg font-bold text-primary">£{Number(payment.amount).toFixed(2)}</span></p>
+                        <p className="flex items-center gap-1"><CalendarIcon className="w-3 h-3"/> Due: {payment.due_date ? format(parseISO(payment.due_date), 'MMM d, yyyy') : 'N/A'}</p>
+                        
+                        {payment.payment_status === 'completed' && (
+                            <div className="flex flex-col">
+                                <span className="text-green-600 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> Paid: {payment.payment_date ? format(parseISO(payment.payment_date), 'MMM d') : ''}</span>
+                                {payment.payment_reference && <span className="text-xs">Ref: {payment.payment_reference}</span>}
+                            </div>
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-col gap-2 ml-4">
-                      {payment.status === "Paid" ? (
-                        <>
-                          <Button size="sm" variant="outline">View Receipt</Button>
-                          <Button size="sm" variant="ghost">Download</Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button size="sm">Record Payment</Button>
-                          <Button size="sm" variant="outline">Send Reminder</Button>
-                          <Button size="sm" variant="ghost">Generate Invoice</Button>
-                        </>
-                      )}
+                    
+                    {/* ACTION BUTTONS */}
+                    <div className="flex gap-2 items-center">
+                        <Button size="sm" variant="outline" onClick={() => handleOpenModify(payment)}>
+                            <Pencil className="w-4 h-4 mr-2"/> Modify
+                        </Button>
                     </div>
                   </div>
                 </CardContent>
@@ -225,55 +235,65 @@ const PaymentsBilling = () => {
         </CardContent>
       </Card>
 
-      {/* Meter Readings */}
+      {/* Meter Readings (Static Placeholder) */}
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>Utility Meter Readings</CardTitle>
-              <CardDescription>Track gas, electricity, and water consumption</CardDescription>
-            </div>
-            <Button>
-              <Zap className="w-4 h-4 mr-2" />
-              Add Reading
-            </Button>
+            <div><CardTitle>Utility Meter Readings</CardTitle><CardDescription>Track gas, electricity, and water consumption</CardDescription></div>
+            <Button variant="outline"><Zap className="w-4 h-4 mr-2" /> Add Reading</Button>
           </div>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {meterReadings.map((reading, index) => (
-              <Card key={index} className="border-border">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h4 className="font-semibold">{reading.property}</h4>
-                        <Badge variant="outline" className="flex items-center gap-1">
-                          {reading.type === "Electricity" && <Zap className="w-3 h-3" />}
-                          {reading.type === "Gas" && <Flame className="w-3 h-3" />}
-                          {reading.type === "Water" && <Droplet className="w-3 h-3" />}
-                          {reading.type}
-                        </Badge>
-                      </div>
-                      <div className="grid md:grid-cols-3 gap-x-6 gap-y-1 text-sm text-muted-foreground">
-                        <p><span className="font-medium text-foreground">Reading:</span> {reading.lastReading}</p>
-                        <p><span className="font-medium text-foreground">Usage:</span> {reading.usage}</p>
-                        <p><span className="font-medium text-foreground">Cost:</span> {reading.cost}</p>
-                        <p>Last: {reading.date}</p>
-                        <p>Next Due: {reading.nextDue}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline">Update</Button>
-                      <Button size="sm">View History</Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+            <div className="text-center py-6 border-2 border-dashed rounded-lg text-muted-foreground text-sm">Meter reading integration coming soon.</div>
         </CardContent>
       </Card>
+
+      {/* --- MODIFY STATUS MODAL --- */}
+      <Dialog open={isModifyOpen} onOpenChange={setIsModifyOpen}>
+        <DialogContent>
+            <DialogHeader><DialogTitle>Update Payment Status</DialogTitle><DialogDescription>Change the status of this transaction.</DialogDescription></DialogHeader>
+            <div className="grid gap-4 py-4">
+                <div className="bg-muted p-3 rounded text-sm mb-2">
+                    <p><strong>Lodger:</strong> {selectedPayment?.lodger_profiles?.full_name}</p>
+                    <p><strong>Current Status:</strong> <span className="capitalize">{selectedPayment?.payment_status}</span></p>
+                </div>
+
+                <div className="space-y-2">
+                    <Label>New Status</Label>
+                    <Select value={statusUpdate} onValueChange={setStatusUpdate}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="completed">Completed (Paid)</SelectItem>
+                            <SelectItem value="pending">Pending</SelectItem>
+                            <SelectItem value="cancelled">Cancelled</SelectItem>
+                            <SelectItem value="failed">Failed</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                {statusUpdate === 'completed' && (
+                    <>
+                        <div className="space-y-2">
+                            <Label>Payment Method</Label>
+                            <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent><SelectItem value="Bank Transfer">Bank Transfer</SelectItem><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Card">Card</SelectItem></SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Reference (Optional)</Label>
+                            <Input placeholder="e.g. TXN-12345" value={paymentRefInput} onChange={e => setPaymentRefInput(e.target.value)} />
+                        </div>
+                    </>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setIsModifyOpen(false)}>Cancel</Button>
+                <Button onClick={handleModifyPayment} disabled={submitting}>{submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>} Update Status</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 };

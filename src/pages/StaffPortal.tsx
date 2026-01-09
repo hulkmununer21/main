@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { 
-  LayoutDashboard, Building2, Trash2, Camera, Sparkles, 
+  LayoutDashboard, Building2, Trash2, Camera, 
   AlertTriangle, Users, MessageSquare, User, Bell, LogOut,
   ClipboardList
 } from "lucide-react";
@@ -13,7 +13,6 @@ import StaffDashboard from "./staff/StaffDashboard";
 import StaffProperties from "./staff/StaffProperties";
 import StaffBinDuties from "./staff/StaffBinDuties";
 import StaffInspections from "./staff/StaffInspections";
-import StaffCleaning from "./staff/StaffCleaning";
 import StaffComplaints from "./staff/StaffComplaints";
 import StaffServiceUsers from "./staff/StaffServiceUsers";
 import StaffMessages from "./staff/StaffMessages";
@@ -28,7 +27,6 @@ const StaffPortal = () => {
     { id: "properties", label: "Properties Assigned", icon: Building2 },
     { id: "bin-duties", label: "Bin Duties", icon: Trash2 },
     { id: "inspections", label: "Inspections", icon: Camera },
-    { id: "cleaning", label: "Cleaning & Maintenance", icon: Sparkles },
     { id: "complaints", label: "Complaints", icon: AlertTriangle },
     { id: "service-users", label: "Service Users Tasks", icon: Users },
     { id: "messages", label: "Messages", icon: MessageSquare },
@@ -45,8 +43,6 @@ const StaffPortal = () => {
         return <StaffBinDuties />;
       case "inspections":
         return <StaffInspections />;
-      case "cleaning":
-        return <StaffCleaning />;
       case "complaints":
         return <StaffComplaints />;
       case "service-users":
