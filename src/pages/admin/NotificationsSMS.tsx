@@ -102,11 +102,12 @@ const NotificationsSMS = () => {
       setLoading(true);
 
       try {
-        // A. Build Directory
-        const [lodgers, staff, serviceUsers] = await Promise.all([
+        // A. Build Directory (Updated to include Landlords)
+        const [lodgers, staff, serviceUsers, landlords] = await Promise.all([
           supabase.from('lodger_profiles').select('id, full_name, user_id, email, phone'),
           supabase.from('staff_profiles').select('id, full_name, user_id, email, phone'),
           supabase.from('service_user_profiles').select('id, full_name, user_id, email, phone'),
+          supabase.from('landlord_profiles').select('id, full_name, user_id, email, phone'),
         ]);
 
         const dir: Record<string, UserProfile> = {};
@@ -126,6 +127,7 @@ const NotificationsSMS = () => {
         lodgers.data?.forEach(u => processUser(u, 'Lodger'));
         staff.data?.forEach(u => processUser(u, 'Staff'));
         serviceUsers.data?.forEach(u => processUser(u, 'Service User'));
+        landlords.data?.forEach(u => processUser(u, 'Landlord'));
         
         dir[user.id] = { id: user.id, name: "Me (Admin)", role: "Admin" }; 
         setUserDirectory(dir);
@@ -390,25 +392,47 @@ const NotificationsSMS = () => {
     setUploading(true);
 
     try {
-        const payloads = broadcastRecipients.map(uid => ({
-            recipient_id: uid,
-            subject: broadcastSubject || "Admin Notification",
-            message_body: broadcastMessage,
-            notification_type: 'in_app',
-            priority: 'high',
-            metadata: {
-                channel: broadcastChannel, 
-                sent_by: user?.id,
-                target_role: userDirectory[uid]?.role,
-                original_subject: broadcastSubject 
-            }
-        }));
+        // ✅ NEW: Email Broadcast Logic (Separated from In-App)
+        if (broadcastChannel === 'email') {
+            const targetEmails = broadcastRecipients
+                .map(id => userDirectory[id]?.email)
+                .filter(email => email && email.includes('@'));
 
-        const { error } = await supabase.from('notifications').insert(payloads);
-        
-        if (error) throw error;
+            if (targetEmails.length === 0) throw new Error("No valid email addresses found for selected users.");
 
-        toast.success(`Broadcast sent to ${broadcastRecipients.length} users via ${broadcastChannel}`);
+            // Call Edge Function
+            const { data, error } = await supabase.functions.invoke('send-broadcast', {
+                body: { emails: targetEmails, subject: broadcastSubject, message: broadcastMessage }
+            });
+
+            if (error) throw new Error(error.message);
+            if (data?.error) throw new Error(data.error);
+
+            toast.success(`Email sent to ${data?.count || targetEmails.length} recipients successfully!`);
+        } else {
+            // ✅ EXISTING: In-App / SMS Logic (Preserved exactly)
+            const payloads = broadcastRecipients.map(uid => ({
+                recipient_id: uid,
+                subject: broadcastSubject || "Admin Notification",
+                message_body: broadcastMessage,
+                notification_type: 'in_app', // Stored as generic, Edge Function reads metadata
+                priority: 'high',
+                metadata: {
+                    channel: broadcastChannel, 
+                    sent_by: user?.id,
+                    target_role: userDirectory[uid]?.role,
+                    original_subject: broadcastSubject 
+                }
+            }));
+
+            const { error } = await supabase.from('notifications').insert(payloads);
+            
+            if (error) throw error;
+
+            toast.success(`Broadcast sent to ${broadcastRecipients.length} users via ${broadcastChannel}`);
+        }
+
+        // Cleanup
         setIsBroadcastOpen(false);
         setBroadcastMessage("");
         setBroadcastSubject("");
@@ -432,7 +456,7 @@ const NotificationsSMS = () => {
   };
 
   const groupedUsers = useMemo(() => {
-    const groups: Record<string, UserProfile[]> = { 'Staff': [], 'Lodger': [], 'Service User': [] };
+    const groups: Record<string, UserProfile[]> = { 'Staff': [], 'Lodger': [], 'Service User': [], 'Landlord': [] };
     Object.values(userDirectory).forEach(u => {
         if (u.id !== user?.id) {
             if (groups[u.role]) {
@@ -521,10 +545,11 @@ const NotificationsSMS = () => {
                         <div className="space-y-2">
                             <Label>Recipients</Label>
                             <Tabs defaultValue="Lodger" className="w-full">
-                                <TabsList className="grid w-full grid-cols-3">
+                                <TabsList className="grid w-full grid-cols-4">
                                     <TabsTrigger value="Lodger">Lodgers</TabsTrigger>
                                     <TabsTrigger value="Staff">Staff</TabsTrigger>
                                     <TabsTrigger value="Service User">Services</TabsTrigger>
+                                    <TabsTrigger value="Landlord">Landlords</TabsTrigger>
                                 </TabsList>
                                 <div className="py-2">
                                     <Input placeholder="Search name..." value={broadcastSearchTerm} onChange={e => setBroadcastSearchTerm(e.target.value)} className="h-8 text-xs" />
@@ -598,10 +623,11 @@ const NotificationsSMS = () => {
                 <DialogContent className="max-w-md">
                     <DialogHeader><DialogTitle>New Chat</DialogTitle><DialogDescription>Select a user to start a conversation.</DialogDescription></DialogHeader>
                     <Tabs defaultValue="Lodger" className="w-full mt-2">
-                        <TabsList className="grid w-full grid-cols-3">
+                        <TabsList className="grid w-full grid-cols-4">
                             <TabsTrigger value="Lodger">Lodgers</TabsTrigger>
                             <TabsTrigger value="Staff">Staff</TabsTrigger>
                             <TabsTrigger value="Service User">Services</TabsTrigger>
+                            <TabsTrigger value="Landlord">Landlords</TabsTrigger>
                         </TabsList>
                         <div className="py-3">
                             <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input placeholder="Search user..." className="pl-8" value={chatSearchTerm} onChange={e => setChatSearchTerm(e.target.value)} /></div>
