@@ -95,6 +95,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       throw new Error("User profile not found.");
     }
 
+    // Check if account is suspended (landlord uses is_verified, others use is_active)
+    let isActive = true;
+    if (role === 'landlord') {
+      isActive = profile.is_verified ?? true;
+    } else if (role !== 'admin') {
+      // Check is_active for staff, lodger, service_user (admins can't be suspended)
+      isActive = profile.is_active ?? true;
+    }
+
+    if (!isActive && role !== 'admin') {
+      await supabase.auth.signOut();
+      const suspensionReason = profile.suspension_reason 
+        ? `\n\nReason: ${profile.suspension_reason}` 
+        : '';
+      toast.error(
+        `Your account has been suspended.${suspensionReason}\n\nPlease contact support for assistance.`,
+        { duration: 8000 }
+      );
+      throw new Error("Account suspended");
+    }
+
     // Update last_login timestamp
     const profileTable = profileTables[role];
     if (profileTable) {

@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/useAuth";
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
+import { UserStatusToggle } from "@/components/admin/UserStatusToggle";
 
 // === INTERFACES ===
 interface ServiceUser {
@@ -367,7 +368,23 @@ const ServiceUsers = () => {
                                 <Badge variant={user.is_active ? 'default' : 'secondary'}>{user.is_active ? 'Active' : 'Inactive'}</Badge>
                             </div>
                             <div className="space-y-1 text-sm mt-3"><p className="flex items-center gap-2"><User className="w-3 h-3"/> {user.email}</p><p className="flex items-center gap-2"><Star className="w-3 h-3 text-yellow-500"/> Rating: {user.rating?.toFixed(1) || 'N/A'}</p></div>
-                            <div className="flex gap-2 mt-4 pt-3 border-t"><Button size="sm" className="flex-1" variant="outline" onClick={() => openAssignTask(user)}>Assign Task</Button><Button size="sm" variant="ghost" onClick={() => handleEditServiceUser(user)}><Pencil className="w-4 h-4"/></Button><Button size="sm" variant="ghost" className="text-red-500" onClick={() => handleDeleteClick(user)}><Trash2 className="w-4 h-4"/></Button></div>
+                            <div className="flex gap-2 mt-4 pt-3 border-t">
+                                <Button size="sm" className="flex-1" variant="outline" onClick={() => openAssignTask(user)}>Assign Task</Button>
+                                {staffId && (
+                                    <UserStatusToggle
+                                        userId={user.user_id}
+                                        userRole="service_user"
+                                        currentStatus={user.is_active}
+                                        userName={user.full_name}
+                                        adminId={staffId}
+                                        adminName="Admin"
+                                        onStatusChange={fetchData}
+                                    />
+                                )}
+                                <Button size="sm" variant="ghost" onClick={() => { setSelectedUser(user); setIsViewDialogOpen(true); }}><Eye className="w-4 h-4"/></Button>
+                                <Button size="sm" variant="ghost" onClick={() => handleEditServiceUser(user)}><Pencil className="w-4 h-4"/></Button>
+                                <Button size="sm" variant="ghost" className="text-red-500" onClick={() => handleDeleteClick(user)}><Trash2 className="w-4 h-4"/></Button>
+                            </div>
                         </CardContent>
                     </Card>
                 ))}
@@ -477,6 +494,60 @@ const ServiceUsers = () => {
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete?</AlertDialogTitle><AlertDialogDescription>Action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={handleDeleteConfirm} className="bg-red-600">Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Service User Details</DialogTitle>
+            <DialogDescription>{selectedUser?.full_name} - {selectedUser?.company_name}</DialogDescription>
+          </DialogHeader>
+          {selectedUser && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <Label className="text-muted-foreground">Email</Label>
+                  <p className="font-medium mt-1">{selectedUser.email}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Phone</Label>
+                  <p className="font-medium mt-1">{selectedUser.phone || 'N/A'}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Service Type</Label>
+                  <p className="font-medium mt-1 capitalize">{selectedUser.service_type}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Hourly Rate</Label>
+                  <p className="font-medium mt-1">£{selectedUser.hourly_rate?.toFixed(2) || 'N/A'}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Rating</Label>
+                  <p className="font-medium mt-1 flex items-center gap-1">
+                    <Star className="w-4 h-4 text-yellow-500 fill-yellow-500"/>
+                    {selectedUser.rating?.toFixed(1) || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Total Jobs</Label>
+                  <p className="font-medium mt-1">{selectedUser.total_jobs}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Certification</Label>
+                  <p className="font-medium mt-1">{selectedUser.certification_number || 'N/A'}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Insurance Expiry</Label>
+                  <p className="font-medium mt-1">{selectedUser.insurance_expiry ? format(parseISO(selectedUser.insurance_expiry), 'PPP') : 'N/A'}</p>
+                </div>
+              </div>
+
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

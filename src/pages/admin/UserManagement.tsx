@@ -30,6 +30,9 @@ import {
 import { Users, Plus, Edit, Trash2, Search, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
+import { UserStatusToggle } from "@/components/admin/UserStatusToggle";
+import { SuspensionHistory } from "@/components/admin/SuspensionHistory";
+import { useAuth } from "@/contexts/useAuth";
 
 interface User {
   id: string;
@@ -44,6 +47,7 @@ interface User {
 }
 
 const UserManagement = () => {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -588,6 +592,15 @@ const UserManagement = () => {
                     <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <UserStatusToggle
+                          userId={user.user_id}
+                          userRole={user.role_type as 'lodger' | 'landlord'}
+                          currentStatus={user.is_verified}
+                          userName={user.full_name}
+                          onStatusChange={loadUsers}
+                          adminId={(currentUser?.profile as any)?.id || ''}
+                          adminName={currentUser?.name || 'Admin'}
+                        />
                         <Button
                           size="sm"
                           variant="ghost"
@@ -1043,7 +1056,7 @@ const UserManagement = () => {
                   <div className="grid grid-cols-2 gap-4">
                     {Object.entries(viewingUser.profile).map(([key, value]) => {
                       // Skip certain fields
-                      if (['id', 'user_id', 'created_at', 'updated_at', 'is_active', 'is_verified', 'email', 'full_name', 'phone'].includes(key)) {
+                      if (['id', 'user_id', 'created_at', 'updated_at', 'is_active', 'is_verified', 'email', 'full_name', 'phone', 'suspended_at', 'suspended_by', 'suspension_reason'].includes(key)) {
                         return null;
                       }
                       
@@ -1065,6 +1078,9 @@ const UserManagement = () => {
                   </div>
                 </div>
               )}
+
+              {/* Suspension History */}
+              <SuspensionHistory userId={viewingUser.user_id} />
             </div>
           )}
 

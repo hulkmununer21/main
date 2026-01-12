@@ -30,6 +30,9 @@ import {
 import { Shield, User, Activity, Plus, Edit, Search, Eye, Trash2, Mail, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
+import { UserStatusToggle } from "@/components/admin/UserStatusToggle";
+import { SuspensionHistory } from "@/components/admin/SuspensionHistory";
+import { useAuth } from "@/contexts/useAuth";
 
 interface StaffMember {
   id: string;
@@ -65,6 +68,7 @@ interface BinScheduleBrief {
 }
 
 const StaffManagement = () => {
+  const { user: currentUser } = useAuth();
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [assignmentsMap, setAssignmentsMap] = useState<Record<string, Assignment[]>>({});
   const [schedulesMap, setSchedulesMap] = useState<Record<string, BinScheduleBrief[]>>({});
@@ -568,6 +572,15 @@ const StaffManagement = () => {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          <UserStatusToggle
+                            userId={staff.user_id}
+                            userRole="staff"
+                            currentStatus={staff.is_active}
+                            userName={staff.full_name}
+                            onStatusChange={loadStaff}
+                            adminId={(currentUser?.profile as any)?.id || ''}
+                            adminName={currentUser?.name || 'Admin'}
+                          />
                           <Button
                             variant="ghost"
                             size="sm"
@@ -890,6 +903,9 @@ const StaffManagement = () => {
                   <p className="text-sm text-muted-foreground">No council schedules assigned</p>
                 )}
               </div>
+
+              {/* Suspension History */}
+              <SuspensionHistory userId={viewingStaff.user_id} />
             </div>
           )}
 
