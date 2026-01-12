@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { 
   Users, Eye, CheckCircle, Clock, Upload, 
   MapPin, Loader2, Image as ImageIcon, Search, Plus, Filter,
-  ShieldCheck, FileText, Info, Calendar
+  ShieldCheck, FileText, Info, Calendar, UserCog 
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -75,9 +75,11 @@ const StaffServiceUsers = () => {
   // Dialogs
   const [isAssignOpen, setIsAssignOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
-  const [isViewDetailsOpen, setIsViewDetailsOpen] = useState(false); // ✅ NEW STATE
+  const [isViewDetailsOpen, setIsViewDetailsOpen] = useState(false); 
+  const [isReassignOpen, setIsReassignOpen] = useState(false); 
   
   const [selectedTask, setSelectedTask] = useState<ServiceTask | null>(null);
+  const [reassignTargetId, setReassignTargetId] = useState<string>(""); 
 
   // Forms
   const [taskForm, setTaskForm] = useState({
@@ -184,6 +186,44 @@ const StaffServiceUsers = () => {
     }
   };
 
+  const handleOpenReassign = (task: ServiceTask) => {
+    setSelectedTask(task);
+    setReassignTargetId(task.service_user_id); 
+    setIsReassignOpen(true);
+  };
+
+  const submitReassignTask = async () => {
+    if (!selectedTask || !reassignTargetId) return;
+    if (reassignTargetId === selectedTask.service_user_id) {
+        setIsReassignOpen(false); 
+        return;
+    }
+
+    setSubmitting(true);
+    try {
+        const { error } = await supabase
+            .from('service_user_tasks')
+            .update({ service_user_id: reassignTargetId })
+            .eq('id', selectedTask.id);
+
+        if (error) throw error;
+
+        const newProfile = serviceUsers.find(u => u.id === reassignTargetId);
+        setTasks(prev => prev.map(t => t.id === selectedTask.id ? { 
+            ...t, 
+            service_user_id: reassignTargetId,
+            service_user_profiles: newProfile ? { full_name: newProfile.full_name, company_name: newProfile.company_name || "", phone: newProfile.phone || "" } : t.service_user_profiles 
+        } : t));
+
+        toast.success("Task reassigned successfully.");
+        setIsReassignOpen(false);
+    } catch (err: any) {
+        toast.error("Reassign failed: " + err.message);
+    } finally {
+        setSubmitting(false);
+    }
+  };
+
   const submitAssignTask = async () => {
     if (!taskForm.service_user_id || !taskForm.task_title || !taskForm.property_id || !taskForm.due_date) {
         return toast.error("Please fill all required fields.");
@@ -212,7 +252,6 @@ const StaffServiceUsers = () => {
         toast.success("Task assigned successfully");
         setIsAssignOpen(false);
         
-        // Reload tasks
         const { data: newTasks } = await supabase
           .from('service_user_tasks')
           .select(`*, properties(property_name, address_line1), rooms(room_number), service_user_profiles(full_name, company_name, phone)`)
@@ -250,6 +289,9 @@ const StaffServiceUsers = () => {
   );
 
   const pendingReviewCount = tasks.filter(t => t.task_status === 'completed').length;
+  // ✅ NEW: Count of pending tasks
+  const pendingTaskCount = tasks.filter(t => t.task_status === 'pending').length;
+  
   const verifiedCount = tasks.filter(t => t.task_status === 'verified').length;
 
   if (loading) return <div className="h-96 flex items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary"/></div>;
@@ -288,7 +330,11 @@ const StaffServiceUsers = () => {
       <Tabs defaultValue="review" className="w-full">
         <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
             <TabsTrigger value="review">Awaiting Review <Badge className="ml-2 bg-orange-500 hover:bg-orange-600">{pendingReviewCount}</Badge></TabsTrigger>
-            <TabsTrigger value="all">My Assigned Tasks</TabsTrigger>
+            {/* ✅ UPDATED: Added Badge for Pending Tasks */}
+            <TabsTrigger value="all">
+                My Assigned Tasks 
+                <Badge className="ml-2 bg-blue-500 hover:bg-blue-600">{pendingTaskCount}</Badge>
+            </TabsTrigger>
         </TabsList>
 
         {/* TAB 1: AWAITING REVIEW */}
@@ -313,11 +359,9 @@ const StaffServiceUsers = () => {
                                         <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1"><Clock className="w-3 h-3"/> Due: {task.due_date ? format(parseISO(task.due_date), 'PPP') : 'N/A'}</p>
                                     </div>
                                     <div className="flex gap-2">
-                                        {/* ✅ VIEW BUTTON */}
                                         <Button size="sm" variant="ghost" onClick={() => handleViewDetails(task)}>
                                             <FileText className="w-4 h-4 mr-2" /> View Details
                                         </Button>
-                                        {/* REVIEW PROOF BUTTON */}
                                         <Button size="sm" onClick={() => handleReviewTask(task)}>
                                             <Eye className="w-4 h-4 mr-2"/> Review Proof
                                         </Button>
@@ -349,8 +393,13 @@ const StaffServiceUsers = () => {
                                         <td className="p-4">{t.service_user_profiles?.full_name}</td>
                                         <td className="p-4 text-muted-foreground">{t.properties?.property_name} {t.rooms && `(Rm ${t.rooms.room_number})`}</td>
                                         <td className="p-4">{getStatusBadge(t.task_status)}</td>
-                                        <td className="p-4 text-right">
-                                            {/* ✅ VIEW BUTTON */}
+                                        <td className="p-4 text-right flex justify-end gap-2">
+                                            {/* Reassign Button (Pending Only) */}
+                                            {t.task_status === 'pending' && (
+                                                <Button size="sm" variant="outline" onClick={() => handleOpenReassign(t)}>
+                                                    <UserCog className="w-3 h-3 mr-2" /> Reassign
+                                                </Button>
+                                            )}
                                             <Button size="sm" variant="ghost" onClick={() => handleViewDetails(t)}>
                                                 <Info className="w-4 h-4"/>
                                             </Button>
@@ -417,14 +466,13 @@ const StaffServiceUsers = () => {
         </DialogContent>
       </Dialog>
 
-      {/* === VIEW DETAILS MODAL (NEW) === */}
+      {/* === VIEW DETAILS MODAL === */}
       <Dialog open={isViewDetailsOpen} onOpenChange={setIsViewDetailsOpen}>
         <DialogContent className="max-w-xl">
             <DialogHeader>
                 <DialogTitle>Task Details</DialogTitle>
                 <DialogDescription>ID: {selectedTask?.id}</DialogDescription>
             </DialogHeader>
-            
             <div className="space-y-4">
                 <div className="flex justify-between items-start">
                     <div>
@@ -433,12 +481,10 @@ const StaffServiceUsers = () => {
                     </div>
                     {selectedTask && getStatusBadge(selectedTask.task_status)}
                 </div>
-
                 <div className="bg-muted p-4 rounded-md text-sm">
                     <h4 className="font-semibold mb-1">Description:</h4>
                     <p className="text-muted-foreground whitespace-pre-wrap">{selectedTask?.task_description || "No description."}</p>
                 </div>
-
                 <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                         <Label className="text-muted-foreground">Location</Label>
@@ -460,9 +506,47 @@ const StaffServiceUsers = () => {
                     </div>
                 </div>
             </div>
-
             <DialogFooter>
                 <Button variant="outline" onClick={() => setIsViewDetailsOpen(false)}>Close</Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* === REASSIGN MODAL === */}
+      <Dialog open={isReassignOpen} onOpenChange={setIsReassignOpen}>
+        <DialogContent className="max-w-md">
+            <DialogHeader>
+                <DialogTitle>Reassign Task</DialogTitle>
+                <DialogDescription>Select a new service user for this task.</DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4 py-2">
+                <div className="p-3 bg-muted rounded-md text-sm">
+                    <span className="font-medium">Task:</span> {selectedTask?.task_title}
+                    <br/>
+                    <span className="font-medium">Current:</span> {selectedTask?.service_user_profiles?.full_name}
+                </div>
+
+                <div className="space-y-2">
+                    <Label>New Contractor</Label>
+                    <Select value={reassignTargetId} onValueChange={setReassignTargetId}>
+                        <SelectTrigger><SelectValue placeholder="Select service user..." /></SelectTrigger>
+                        <SelectContent>
+                            {serviceUsers.map(u => (
+                                <SelectItem key={u.id} value={u.id}>
+                                    {u.full_name} ({u.service_type})
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            </div>
+
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setIsReassignOpen(false)}>Cancel</Button>
+                <Button onClick={submitReassignTask} disabled={submitting || !reassignTargetId}>
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin"/> : "Confirm Reassign"}
+                </Button>
             </DialogFooter>
         </DialogContent>
       </Dialog>

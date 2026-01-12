@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { 
   MessageSquare, AlertTriangle, Clock, CheckCircle, User, 
-  Loader2, Download, Check, X, Shield, FileText, Image as ImageIcon 
+  Loader2, Download, Check, X, Shield, FileText, Image as ImageIcon,
+  RotateCcw, UserCog // ✅ Added new icons
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -159,6 +160,30 @@ const ComplaintManagement = () => {
     }
   };
 
+  // ✅ NEW: Revert Status Action
+  const handleRevertStatus = async (id: string) => {
+    try {
+        const { error } = await supabase
+            .from('complaints')
+            .update({ 
+                complaint_status: 'in_progress',
+                evidence_urls: null, // Clear evidence
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        toast.success("Complaint reverted to In Progress");
+
+        // Update local state immediately
+        setComplaints(prev => prev.map(c => 
+            c.id === id ? { ...c, complaint_status: 'in_progress', evidence_urls: null } : c
+        ));
+    } catch (e: any) {
+        toast.error("Revert failed: " + e.message);
+    }
+  };
+
   // --- HELPERS ---
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -193,7 +218,6 @@ const ComplaintManagement = () => {
                     <SelectItem value="resolved">Resolved</SelectItem>
                 </SelectContent>
             </Select>
-            <Button variant="outline"><Download className="w-4 h-4 mr-2"/> Export</Button>
         </div>
       </div>
 
@@ -280,12 +304,31 @@ const ComplaintManagement = () => {
 
                         {/* Buttons */}
                         <div className="flex flex-col gap-2 min-w-[140px]">
+                            {/* Assign Button (Pending Only) */}
                             {complaint.complaint_status === 'pending' && (
                                 <Button size="sm" onClick={() => { setSelectedComplaint(complaint); setAssignModalOpen(true); }}>Assign Staff</Button>
                             )}
+
+                            {/* ✅ Reassign Button (In Progress Only) */}
+                            {complaint.complaint_status === 'in_progress' && (
+                                <Button size="sm" variant="outline" onClick={() => { setSelectedComplaint(complaint); setAssignModalOpen(true); }}>
+                                    <UserCog className="w-3 h-3 mr-2"/> Reassign
+                                </Button>
+                            )}
+
+                            {/* Resolve Button */}
                             {complaint.complaint_status !== 'resolved' && complaint.complaint_status !== 'rejected' && (
                                 <Button size="sm" variant="outline" className="text-green-600 hover:text-green-700 hover:bg-green-50" onClick={() => handleStatusUpdate(complaint.id, 'resolved')}><Check className="w-3 h-3 mr-2"/> Resolve</Button>
                             )}
+
+                            {/* ✅ Revert Button (Resolved Only) */}
+                            {complaint.complaint_status === 'resolved' && (
+                                <Button size="sm" variant="secondary" className="text-orange-600 border-orange-200 hover:bg-orange-50" onClick={() => handleRevertStatus(complaint.id)}>
+                                    <RotateCcw className="w-3 h-3 mr-2"/> Revert Status
+                                </Button>
+                            )}
+
+                            {/* Reject Button */}
                             {complaint.complaint_status === 'pending' && (
                                 <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => handleStatusUpdate(complaint.id, 'rejected')}><X className="w-3 h-3 mr-2"/> Reject</Button>
                             )}
