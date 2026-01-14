@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { 
   Calendar, Users, AlertCircle, CheckCircle, RotateCcw, ListOrdered, 
-  Search, ShieldCheck, Gavel, Trash2, Loader2 
+  Search, ShieldCheck, Gavel, Trash2, Loader2, History
 } from "lucide-react";
 import { format, formatDistanceToNow, parseISO, isPast } from 'date-fns';
 import { useAuth } from "@/contexts/useAuth";
@@ -29,20 +29,31 @@ interface Tenancy { id: string; property_id: string; room_id: string; lodger_id:
 interface RotationState { property_id: string; current_room_id: string; next_rotation_date: string; current_lodger_id: string | null; }
 interface BinSchedule { id: string; property_id: string; bin_type: string; collection_frequency: string; next_collection_date: string; assigned_staff_id: string | null; }
 
-// ✅ HISTORY INTERFACE (Fixed: Using created_at)
+// History Interface (In-House)
 interface BinRotationLog { 
   id: string; 
   property_id: string; 
   room_id: string; 
   lodger_id: string; 
   tenancy_id?: string;
-  created_at: string; // ✅ Fixed: swapped rotation_date for created_at
+  created_at: string; 
   bin_duty_status: string; 
   is_verified: boolean; 
   notes?: string; 
   properties?: { property_name: string };
   rooms?: { room_number: string };
   lodger_profiles?: { full_name: string };
+}
+
+// ✅ NEW: History Interface (Council)
+interface CouncilLog {
+  id: string;
+  property_name: string;
+  bin_type: string;
+  collection_date: string;
+  status: string;
+  staff_name?: string;
+  created_at: string;
 }
 
 // === COMPONENT ===
@@ -60,6 +71,7 @@ const BinManagement = () => {
   const [rotationStates, setRotationStates] = useState<RotationState[]>([]);
   const [schedules, setSchedules] = useState<BinSchedule[]>([]);
   const [historyLogs, setHistoryLogs] = useState<BinRotationLog[]>([]);
+  const [councilLogs, setCouncilLogs] = useState<CouncilLog[]>([]); // ✅ NEW State
   const [staffProfileId, setStaffProfileId] = useState<string | null>(null);
   
   const [isLoading, setIsLoading] = useState(true);
@@ -99,7 +111,7 @@ const BinManagement = () => {
 
       const [
         propsRes, roomsRes, tenancyRes, lodgerRes, staffRes, 
-        stateRes, schedRes, rotationHistoryRes
+        stateRes, schedRes, rotationHistoryRes, councilHistoryRes
       ] = await Promise.all([
         supabase.from('properties').select('id, property_name, rotation_day_of_week'),
         supabase.from('rooms').select('id, property_id, room_number, bin_rotation_order'),
@@ -108,16 +120,16 @@ const BinManagement = () => {
         supabase.from('staff_profiles').select('id, full_name, user_id'),
         supabase.from('in_house_rotation_state').select('*'),
         supabase.from('bin_schedules').select('*'),
-        // ✅ FETCH using created_at for sorting
+        // In-House Logs
         supabase.from('bin_rotations')
-          .select(`
-            *,
-            properties (property_name),
-            rooms (room_number),
-            lodger_profiles (full_name)
-          `)
-          .order('created_at', { ascending: false }) // ✅ Fixed column name
-          .limit(500)
+          .select(`*, properties (property_name), rooms (room_number), lodger_profiles (full_name)`)
+          .order('created_at', { ascending: false })
+          .limit(200),
+        // ✅ Council Logs
+        supabase.from('bin_collection_logs')
+          .select(`*, properties(property_name), staff_profiles(full_name)`)
+          .order('collection_date', { ascending: false })
+          .limit(100)
       ]);
 
       if (propsRes.error) throw propsRes.error;
@@ -130,6 +142,18 @@ const BinManagement = () => {
       setRotationStates(stateRes.data || []);
       setSchedules(schedRes.data || []);
       setHistoryLogs(rotationHistoryRes.data || []);
+
+      // ✅ Process Council Logs
+      const processedCouncilLogs: CouncilLog[] = (councilHistoryRes.data || []).map((log: any) => ({
+        id: log.id,
+        property_name: log.properties?.property_name || 'Unknown Property',
+        bin_type: log.bin_type,
+        collection_date: log.collection_date,
+        status: log.status,
+        staff_name: log.staff_profiles?.full_name || 'Unknown Staff',
+        created_at: log.created_at
+      }));
+      setCouncilLogs(processedCouncilLogs);
 
     } catch (error: any) {
       console.error("Data Load Error:", error);
@@ -170,8 +194,7 @@ const BinManagement = () => {
   };
 
 
-  // --- SETUP & ROTATION HANDLERS ---
-
+  // --- SETUP & ROTATION HANDLERS (Preserved) ---
   const handleOpenSetup = () => {
     setInitRotationDialogOpen(true);
     setSetupStep(1);
@@ -249,24 +272,6 @@ const BinManagement = () => {
       toast.error("Failed: " + error.message);
     } finally { setSaving(false); }
   };
-
-  const handleSendReminder = async (lodgerId: string | null, propertyName: string) => {
-    if (!lodgerId) return toast.error("No lodger assigned.");
-    const lodger = lodgers.find(l => l.id === lodgerId);
-    if (!lodger?.user_id) return toast.error("Lodger user account not found.");
-
-    const { error } = await supabase.from('notifications').insert({
-      recipient_id: lodger.user_id,
-      notification_type: 'in_app',
-      priority: 'medium',
-      subject: 'Bin Duty Reminder',
-      message_body: `Reminder: You are on bin duty for ${propertyName}.`,
-      related_entity_type: 'bin_rotation',
-      sent_at: new Date().toISOString()
-    });
-    if (error) toast.error("Failed to send."); else toast.success("Reminder sent.");
-  };
-
 
   // --- HANDLERS: COUNCIL & CHARGES ---
 
@@ -388,6 +393,8 @@ const BinManagement = () => {
             <TabsTrigger value="overview">Active Rotations</TabsTrigger>
             <TabsTrigger value="history">Weekly History Log</TabsTrigger>
             <TabsTrigger value="council">Council Schedule</TabsTrigger>
+            {/* ✅ NEW TAB */}
+            <TabsTrigger value="council-history">Council History</TabsTrigger>
         </TabsList>
 
         {/* TAB 1: OVERVIEW */}
@@ -511,9 +518,54 @@ const BinManagement = () => {
                 </CardContent>
             </Card>
         </TabsContent>
+
+        {/* ✅ TAB 4: COUNCIL HISTORY */}
+        <TabsContent value="council-history" className="mt-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><History className="w-5 h-5"/> Completed Collections</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                    <div className="relative w-full overflow-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-muted/50 border-b">
+                                <tr>
+                                    <th className="p-4 font-medium">Date Collected</th>
+                                    <th className="p-4 font-medium">Property</th>
+                                    <th className="p-4 font-medium">Bin Type</th>
+                                    <th className="p-4 font-medium">Completed By</th>
+                                    <th className="p-4 font-medium text-right">Logged At</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {councilLogs.length === 0 ? (
+                                    <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">No records found.</td></tr>
+                                ) : (
+                                    councilLogs.map((log) => (
+                                        <tr key={log.id} className="hover:bg-muted/5">
+                                            <td className="p-4 font-medium">{format(parseISO(log.collection_date), 'PPP')}</td>
+                                            <td className="p-4">{log.property_name}</td>
+                                            <td className="p-4">
+                                                <Badge variant="outline" className={log.bin_type === 'Recycling' ? 'bg-green-50 text-green-700' : ''}>
+                                                    {log.bin_type}
+                                                </Badge>
+                                            </td>
+                                            <td className="p-4 text-muted-foreground">{log.staff_name}</td>
+                                            <td className="p-4 text-right text-muted-foreground">
+                                                {format(parseISO(log.created_at), 'p, d MMM')}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </CardContent>
+            </Card>
+        </TabsContent>
       </Tabs>
 
-      {/* --- DIALOGS --- */}
+      {/* --- DIALOGS (Preserved) --- */}
       
       {/* Verify Dialog */}
       <Dialog open={verifyDialogOpen} onOpenChange={setVerifyDialogOpen}>
@@ -546,7 +598,7 @@ const BinManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Setup & Manual Assign Dialogs (Same as before) */}
+      {/* Setup & Manual Assign Dialogs (Preserved) */}
       <Dialog open={initRotationDialogOpen} onOpenChange={setInitRotationDialogOpen}>
         <DialogContent className="max-w-xl">
             <DialogHeader><DialogTitle>Setup Rotation</DialogTitle></DialogHeader>

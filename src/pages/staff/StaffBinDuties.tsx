@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { 
   Trash2, Calendar, CheckCircle, AlertTriangle, Building2, Loader2, 
-  User, ShieldCheck, XCircle, Gavel, Search, MoreHorizontal, Clock 
+  User, ShieldCheck, XCircle, Gavel, Search, MoreHorizontal, Clock, MapPin,
+  CalendarDays, History
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -15,7 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/useAuth";
-import { format, isSameDay, parseISO, startOfWeek, isPast, addDays } from "date-fns";
+import { format, isSameDay, parseISO, startOfWeek, isPast, addDays, formatDistanceToNow, isToday, isTomorrow } from "date-fns";
 
 // === 1. INTERFACES ===
 interface InHouseDuty {
@@ -36,9 +37,20 @@ interface InHouseDuty {
 interface CouncilDuty {
   id: string; 
   property_name: string;
+  property_id: string;
+  address_line1?: string;
   bin_type: string;
   next_collection_date: string;
   status: 'pending' | 'completed';
+}
+
+// ✅ NEW: Interface for Council History Log
+interface CouncilLog {
+  id: string;
+  property_name: string;
+  bin_type: string;
+  collection_date: string;
+  created_at: string;
 }
 
 const StaffBinDuties = () => {
@@ -47,6 +59,7 @@ const StaffBinDuties = () => {
   const [inHouseDuties, setInHouseDuties] = useState<InHouseDuty[]>([]);
   const [councilDuties, setCouncilDuties] = useState<CouncilDuty[]>([]);
   const [historyLog, setHistoryLog] = useState<InHouseDuty[]>([]);
+  const [councilHistory, setCouncilHistory] = useState<CouncilLog[]>([]); // ✅ NEW State
   const [loading, setLoading] = useState(true);
   const [staffProfileId, setStaffProfileId] = useState<string | null>(null);
 
@@ -62,7 +75,7 @@ const StaffBinDuties = () => {
   const [staffNotes, setStaffNotes] = useState("");
   const [fineAmount, setFineAmount] = useState("15.00");
   const [newDate, setNewDate] = useState(""); 
-  const [processing, setProcessing] = useState(false);
+  const [processing, setProcessing] = useState<string | boolean>(false);
   const [searchTerm, setSearchTerm] = useState("");
 
   // --- DATA FETCHING ---
@@ -76,13 +89,10 @@ const StaffBinDuties = () => {
       setStaffProfileId(staffProfile.id);
       const staffId = staffProfile.id;
 
+      // 1. Get Assigned Properties
       const { data: assignments } = await supabase.from('staff_property_assignments').select('property_id').eq('staff_id', staffId);
-      const { data: councilScheds } = await supabase.from('bin_schedules').select('property_id').eq('assigned_staff_id', staffId);
       
-      const propIds = Array.from(new Set([
-        ...(assignments?.map(a => a.property_id) || []),
-        ...(councilScheds?.map(c => c.property_id) || [])
-      ]));
+      const propIds = assignments?.map(a => a.property_id) || [];
 
       if (propIds.length === 0) {
         setLoading(false);
@@ -90,24 +100,41 @@ const StaffBinDuties = () => {
       }
 
       const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }).toISOString();
+      const futureDate = addDays(new Date(), 14).toISOString(); 
 
-      const [propsRes, roomsRes, rotationsRes, schedulesRes, logsRes] = await Promise.all([
-        supabase.from('properties').select('id, property_name').in('id', propIds),
+      const [propsRes, roomsRes, rotationsRes, logsRes, schedulesRes, councilLogsRes] = await Promise.all([
+        supabase.from('properties').select('id, property_name, address_line1').in('id', propIds),
         supabase.from('rooms').select('id, room_number').in('property_id', propIds),
         supabase.from('in_house_rotation_state').select('*').in('property_id', propIds),
-        supabase.from('bin_schedules').select('*').eq('assigned_staff_id', staffId),
+        
+        // Log History (In House)
         supabase.from('bin_rotations')
           .select('*, lodger_profiles(full_name), properties(property_name), rooms(room_number)')
           .in('property_id', propIds)
           .order('created_at', { ascending: false })
-          .limit(100) 
+          .limit(100),
+
+        // Council Bins Schedule
+        supabase.from('bin_schedules')
+          .select('*, properties(id, property_name, address_line1)')
+          .in('property_id', propIds)
+          .lte('next_collection_date', futureDate) 
+          .order('next_collection_date', { ascending: true }),
+
+        // ✅ NEW: Council Bins History (Logged by this staff)
+        supabase.from('bin_collection_logs')
+          .select('*, properties(property_name)')
+          .eq('staff_id', staffId)
+          .order('collection_date', { ascending: false })
+          .limit(50)
       ]);
 
       const properties = (propsRes.data as any[]) || [];
       const rooms = (roomsRes.data as any[]) || [];
       const rotations = (rotationsRes.data as any[]) || [];
-      const schedules = (schedulesRes.data as any[]) || [];
       const logs = (logsRes.data as any[]) || [];
+      const schedules = (schedulesRes.data as any[]) || [];
+      const councilLogs = (councilLogsRes.data as any[]) || []; // ✅
 
       // --- IN HOUSE LOGIC ---
       const activeList: InHouseDuty[] = rotations.map(rot => {
@@ -146,19 +173,30 @@ const StaffBinDuties = () => {
         notes: l.notes
       }));
 
-      setInHouseDuties(activeList);
-      setHistoryLog(historyList);
-
       // --- COUNCIL LOGIC ---
       const processedCouncil: CouncilDuty[] = schedules.map(sched => ({
         id: sched.id, 
-        property_name: properties.find(p => p.id === sched.property_id)?.property_name || "Unknown",
+        property_id: sched.property_id,
+        property_name: sched.properties?.property_name || "Unknown",
+        address_line1: sched.properties?.address_line1,
         bin_type: sched.bin_type,
         next_collection_date: sched.next_collection_date,
         status: 'pending'
       }));
+
+      // ✅ Process Council History
+      const processedCouncilHistory: CouncilLog[] = councilLogs.map(log => ({
+        id: log.id,
+        property_name: log.properties?.property_name || "Unknown",
+        bin_type: log.bin_type,
+        collection_date: log.collection_date,
+        created_at: log.created_at
+      }));
       
-      setCouncilDuties(processedCouncil.sort((a,b) => new Date(a.next_collection_date).getTime() - new Date(b.next_collection_date).getTime()));
+      setInHouseDuties(activeList);
+      setHistoryLog(historyList);
+      setCouncilDuties(processedCouncil);
+      setCouncilHistory(processedCouncilHistory); // ✅
 
     } catch (error) {
       console.error("Fetch Error:", error);
@@ -171,6 +209,34 @@ const StaffBinDuties = () => {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // --- ACTIONS ---
+
+  const handleMarkCouncilComplete = async (duty: CouncilDuty) => {
+    if (!staffProfileId) return;
+    setProcessing(duty.id); 
+
+    try {
+        const { error: logError } = await supabase.from('bin_collection_logs').insert({
+            property_id: duty.property_id,
+            staff_id: staffProfileId,
+            bin_type: duty.bin_type,
+            collection_date: duty.next_collection_date,
+            status: 'completed'
+        });
+
+        if (logError) throw logError;
+
+        const nextDate = addDays(new Date(duty.next_collection_date), 7);
+        await supabase.from('bin_schedules').update({ next_collection_date: nextDate }).eq('id', duty.id);
+
+        toast.success("Bin collection logged successfully");
+        fetchData(); 
+
+    } catch (err: any) {
+        toast.error("Failed to log: " + err.message);
+    } finally {
+        setProcessing(false);
+    }
+  };
 
   const handleVerify = async () => {
     if (!selectedTask?.log_id || !staffProfileId) return;
@@ -263,11 +329,34 @@ const StaffBinDuties = () => {
     return <Badge variant="secondary">Pending</Badge>;
   };
 
+  const getDueStatus = (dateStr: string) => {
+    const date = parseISO(dateStr);
+    const overdue = isPast(date) && !isSameDay(date, new Date());
+    
+    let text = "";
+    let colorClass = "";
+
+    if (overdue) {
+        text = `Overdue by ${formatDistanceToNow(date)}`;
+        colorClass = "text-red-600 font-bold";
+    } else if (isToday(date)) {
+        text = "Due Today";
+        colorClass = "text-orange-600 font-bold";
+    } else if (isTomorrow(date)) {
+        text = "Due Tomorrow";
+        colorClass = "text-orange-500 font-medium";
+    } else {
+        text = `Due in ${formatDistanceToNow(date)}`;
+        colorClass = "text-green-600 font-medium";
+    }
+
+    return { text, colorClass, overdue };
+  };
+
   const isOverdue = (dateStr: string) => isPast(parseISO(dateStr)) && !isSameDay(parseISO(dateStr), new Date());
 
   if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin" /></div>;
 
-  // Stats
   const totalActive = inHouseDuties.length;
   const completedCount = inHouseDuties.filter(d => (d.status === 'completed' && d.is_verified)).length;
   const pendingVerifyCount = inHouseDuties.filter(d => d.status === 'completed' && !d.is_verified).length;
@@ -286,9 +375,11 @@ const StaffBinDuties = () => {
 
       <Tabs defaultValue="active" className="w-full">
         <TabsList className="w-full justify-start">
-          <TabsTrigger value="active">Active Duties</TabsTrigger>
+          <TabsTrigger value="active">Active Duties (In-House)</TabsTrigger>
           <TabsTrigger value="council">Council Schedule</TabsTrigger>
-          <TabsTrigger value="history">Full History Log</TabsTrigger>
+          {/* ✅ NEW TAB TRIGGER */}
+          <TabsTrigger value="council-history">Council Log</TabsTrigger>
+          <TabsTrigger value="history">History Log (In-House)</TabsTrigger>
         </TabsList>
 
         {/* TAB 1: ACTIVE */}
@@ -313,35 +404,86 @@ const StaffBinDuties = () => {
           </div>
         </TabsContent>
 
-        {/* TAB 2: COUNCIL (With Reschedule) */}
+        {/* TAB 2: COUNCIL SCHEDULE */}
         <TabsContent value="council" className="mt-6 w-full">
           <Card className="w-full">
+            <CardHeader><CardTitle>Upcoming Collection Schedule</CardTitle></CardHeader>
             <CardContent className="p-0">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-muted text-muted-foreground">
-                    <tr><th className="p-4 font-medium">Property</th><th className="p-4 font-medium">Bin Type</th><th className="p-4 font-medium">Collection Date</th><th className="p-4 font-medium text-right">Actions</th></tr>
-                </thead>
-                <tbody>
-                {councilDuties.map((c) => (
-                    <tr key={c.id} className="border-b last:border-0 hover:bg-muted/5">
-                        <td className="p-4 font-medium">{c.property_name}</td>
-                        <td className="p-4"><Badge variant="outline">{c.bin_type}</Badge></td>
-                        <td className="p-4"><div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-muted-foreground"/> {format(parseISO(c.next_collection_date), 'EEE, d MMM yyyy')}</div></td>
-                        <td className="p-4 text-right">
-                             <DropdownMenu>
-                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="w-4 h-4"/></Button></DropdownMenuTrigger>
-                                <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => { setSelectedCouncilTask(c); setRescheduleModalOpen(true); }}><Clock className="w-4 h-4 mr-2"/> Reschedule</DropdownMenuItem></DropdownMenuContent>
-                            </DropdownMenu>
-                        </td>
-                    </tr>
-                ))}
-                </tbody>
-              </table>
+                <div className="space-y-4 p-6">
+                    {councilDuties.length === 0 ? <p className="text-muted-foreground text-center py-4">No schedule available.</p> : 
+                    councilDuties.map((item) => {
+                        const { text, colorClass } = getDueStatus(item.next_collection_date);
+                        return (
+                            <div key={item.id} className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border rounded-lg hover:bg-muted/50 gap-4">
+                                <div className="flex-1">
+                                    <h4 className="font-semibold flex items-center gap-2 text-lg">
+                                        {item.property_name}
+                                        <Badge variant="outline" className={item.bin_type === 'Recycling' ? 'bg-green-50 text-green-700' : 'bg-gray-100'}>{item.bin_type}</Badge>
+                                    </h4>
+                                    {item.address_line1 && <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1"><MapPin className="w-3 h-3"/> {item.address_line1}</p>}
+                                    <div className="flex items-center gap-3 mt-2">
+                                        <p className="text-sm text-muted-foreground flex items-center gap-1"><CalendarDays className="w-3 h-3"/> {format(parseISO(item.next_collection_date), 'EEE, d MMM')}</p>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full bg-opacity-10 border ${colorClass} bg-current`}>{text}</span>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2 w-full md:w-auto">
+                                    <Button size="sm" variant="outline" onClick={() => { setSelectedCouncilTask(item); setRescheduleModalOpen(true); }}>Reschedule</Button>
+                                    <Button size="sm" onClick={() => handleMarkCouncilComplete(item)} disabled={!!processing} className="bg-green-600 hover:bg-green-700 flex-1 md:flex-none">
+                                        {processing === item.id ? <Loader2 className="animate-spin w-4 h-4"/> : <><CheckCircle className="w-4 h-4 mr-2"/> Mark Done</>}
+                                    </Button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* TAB 3: HISTORY (With Visible Actions) */}
+        {/* ✅ TAB 3: COUNCIL LOG (NEW) */}
+        <TabsContent value="council-history" className="mt-6 w-full">
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><History className="w-5 h-5"/> My Completion Log</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                    <div className="relative w-full overflow-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-muted/50 border-b">
+                                <tr>
+                                    <th className="p-4 font-medium">Date Collected</th>
+                                    <th className="p-4 font-medium">Property</th>
+                                    <th className="p-4 font-medium">Bin Type</th>
+                                    <th className="p-4 font-medium text-right">Logged At</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {councilHistory.length === 0 ? (
+                                    <tr><td colSpan={4} className="p-8 text-center text-muted-foreground">No records found.</td></tr>
+                                ) : (
+                                    councilHistory.map((log) => (
+                                        <tr key={log.id} className="hover:bg-muted/5">
+                                            <td className="p-4 font-medium">{format(parseISO(log.collection_date), 'PPP')}</td>
+                                            <td className="p-4">{log.property_name}</td>
+                                            <td className="p-4">
+                                                <Badge variant="outline" className={log.bin_type === 'Recycling' ? 'bg-green-50 text-green-700' : ''}>
+                                                    {log.bin_type}
+                                                </Badge>
+                                            </td>
+                                            <td className="p-4 text-right text-muted-foreground">
+                                                {format(parseISO(log.created_at), 'p, d MMM')}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </CardContent>
+            </Card>
+        </TabsContent>
+
+        {/* TAB 4: HISTORY (IN HOUSE) */}
         <TabsContent value="history" className="mt-6 w-full">
           <div className="flex gap-2 mb-4 w-full"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"/><Input placeholder="Search property..." className="pl-9 w-full" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div></div>
           <div className="border rounded-lg overflow-hidden bg-card w-full shadow-sm">
@@ -350,7 +492,7 @@ const StaffBinDuties = () => {
                     <tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">Property</th><th className="p-4 text-left">Lodger</th><th className="p-4 text-left">Status</th><th className="p-4 text-right">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y">
-                    {historyLog.filter(h => h.property_name.toLowerCase().includes(searchTerm.toLowerCase())).map((log) => (
+                    {historyLog.filter(h => h.property_name?.toLowerCase().includes(searchTerm.toLowerCase())).map((log) => (
                         <tr key={log.id} className="hover:bg-muted/5">
                             <td className="p-4">{format(parseISO(log.rotation_date), 'dd/MM/yy')}</td>
                             <td className="p-4">{log.property_name}</td>
@@ -358,13 +500,8 @@ const StaffBinDuties = () => {
                             <td className="p-4">{getStatusBadge(log.status, log.is_verified)}</td>
                             <td className="p-4 text-right">
                                 <div className="flex justify-end gap-2">
-                                    {/* ALWAYS VISIBLE BUTTONS */}
-                                    {log.status === 'completed' && !log.is_verified && (
-                                        <Button size="sm" className="h-8 px-3 bg-green-600 hover:bg-green-700 text-white shadow-sm" onClick={() => { setSelectedTask(log); setVerifyModalOpen(true); }}><ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Verify</Button>
-                                    )}
-                                    {!log.is_verified && log.status !== 'missed' && log.lodger_id && (
-                                        <Button size="sm" variant="outline" className="h-8 px-3 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 hover:border-red-300" onClick={() => { setSelectedTask(log); setFineModalOpen(true); }}><Gavel className="h-3.5 w-3.5 mr-1.5" /> Fine</Button>
-                                    )}
+                                    {log.status === 'completed' && !log.is_verified && (<Button size="sm" className="h-8 px-3 bg-green-600 hover:bg-green-700 text-white shadow-sm" onClick={() => { setSelectedTask(log); setVerifyModalOpen(true); }}><ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Verify</Button>)}
+                                    {!log.is_verified && log.status !== 'missed' && log.lodger_id && (<Button size="sm" variant="outline" className="h-8 px-3 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 hover:border-red-300" onClick={() => { setSelectedTask(log); setFineModalOpen(true); }}><Gavel className="h-3.5 w-3.5 mr-1.5" /> Fine</Button>)}
                                 </div>
                             </td>
                         </tr>
@@ -375,31 +512,10 @@ const StaffBinDuties = () => {
         </TabsContent>
       </Tabs>
 
-      {/* MODALS */}
-      <Dialog open={verifyModalOpen} onOpenChange={setVerifyModalOpen}>
-        <DialogContent><DialogHeader><DialogTitle>Verify Duty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><p>Confirm {selectedTask?.lodger_name} completed task.</p><Label>Notes</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="outline" onClick={() => setVerifyModalOpen(false)}>Cancel</Button><Button className="bg-green-600" onClick={handleVerify}>Confirm</Button></DialogFooter></DialogContent>
-      </Dialog>
-      <Dialog open={fineModalOpen} onOpenChange={setFineModalOpen}>
-        <DialogContent className="border-red-200"><DialogHeader><DialogTitle className="text-red-600">Issue Penalty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="bg-red-50 p-3 rounded text-sm text-red-800">Marking as Missed & Charging.</div><Label>Amount (£)</Label><Input type="number" value={fineAmount} onChange={e => setFineAmount(e.target.value)} /><Label>Reason</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="ghost" onClick={() => setFineModalOpen(false)}>Cancel</Button><Button variant="destructive" onClick={handleIssueFine}>Confirm Penalty</Button></DialogFooter></DialogContent>
-      </Dialog>
-      
-      {/* RESCHEDULE MODAL */}
-      <Dialog open={rescheduleModalOpen} onOpenChange={setRescheduleModalOpen}>
-        <DialogContent>
-            <DialogHeader><DialogTitle>Reschedule Collection</DialogTitle></DialogHeader>
-            <div className="py-4 space-y-4">
-                <p className="text-sm text-muted-foreground">Select a new date for {selectedCouncilTask?.bin_type} bin collection at {selectedCouncilTask?.property_name}.</p>
-                <div className="space-y-2">
-                    <Label>New Date</Label>
-                    <Input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} min={new Date().toISOString().split("T")[0]} />
-                </div>
-            </div>
-            <DialogFooter>
-                <Button variant="outline" onClick={() => setRescheduleModalOpen(false)}>Cancel</Button>
-                <Button onClick={handleReschedule} disabled={!newDate || processing}>Update Date</Button>
-            </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* MODALS (Verify, Fine, Reschedule) - Preserved */}
+      <Dialog open={verifyModalOpen} onOpenChange={setVerifyModalOpen}><DialogContent><DialogHeader><DialogTitle>Verify Duty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><p>Confirm {selectedTask?.lodger_name} completed task.</p><Label>Notes</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="outline" onClick={() => setVerifyModalOpen(false)}>Cancel</Button><Button className="bg-green-600" onClick={handleVerify}>Confirm</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={fineModalOpen} onOpenChange={setFineModalOpen}><DialogContent className="border-red-200"><DialogHeader><DialogTitle className="text-red-600">Issue Penalty</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="bg-red-50 p-3 rounded text-sm text-red-800">Marking as Missed & Charging.</div><Label>Amount (£)</Label><Input type="number" value={fineAmount} onChange={e => setFineAmount(e.target.value)} /><Label>Reason</Label><Textarea value={staffNotes} onChange={e => setStaffNotes(e.target.value)}/></div><DialogFooter><Button variant="ghost" onClick={() => setFineModalOpen(false)}>Cancel</Button><Button variant="destructive" onClick={handleIssueFine}>Confirm Penalty</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={rescheduleModalOpen} onOpenChange={setRescheduleModalOpen}><DialogContent><DialogHeader><DialogTitle>Reschedule Collection</DialogTitle></DialogHeader><div className="py-4 space-y-4"><p className="text-sm text-muted-foreground">Select a new date for {selectedCouncilTask?.bin_type} bin collection at {selectedCouncilTask?.property_name}.</p><div className="space-y-2"><Label>New Date</Label><Input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} min={new Date().toISOString().split("T")[0]} /></div></div><DialogFooter><Button variant="outline" onClick={() => setRescheduleModalOpen(false)}>Cancel</Button><Button onClick={handleReschedule} disabled={!newDate || !!processing}>Update Date</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 };
