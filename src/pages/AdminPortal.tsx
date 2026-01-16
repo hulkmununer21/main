@@ -69,6 +69,70 @@ const AdminPortal = () => {
     confirmPassword: "",
   });
   const [passwordChanging, setPasswordChanging] = useState(false);
+  const [stats, setStats] = useState({
+    totalProperties: 0,
+    totalUsers: 0,
+    monthlyRevenue: 0,
+    activeStaff: 0,
+  });
+  const [statsLoading, setStatsLoading] = useState(true);
+
+  // Fetch dashboard stats
+  useEffect(() => {
+    fetchDashboardStats();
+  }, []);
+
+  const fetchDashboardStats = async () => {
+    setStatsLoading(true);
+    try {
+      // Fetch properties count
+      const { count: propertiesCount } = await supabase
+        .from("properties")
+        .select("*", { count: "exact", head: true });
+
+      // Fetch total users (combining all user types)
+      const { count: landlordsCount } = await supabase
+        .from("landlord_profiles")
+        .select("*", { count: "exact", head: true });
+      
+      const { count: lodgersCount } = await supabase
+        .from("lodger_profiles")
+        .select("*", { count: "exact", head: true });
+      
+      const { count: serviceUsersCount } = await supabase
+        .from("service_user_profiles")
+        .select("*", { count: "exact", head: true });
+
+      // Fetch staff count
+      const { count: staffCount } = await supabase
+        .from("staff_profiles")
+        .select("*", { count: "exact", head: true });
+
+      // Fetch monthly revenue (current month)
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+
+      const { data: paymentsData } = await supabase
+        .from("payments")
+        .select("amount")
+        .gte("payment_date", startOfMonth.toISOString())
+        .eq("status", "completed");
+
+      const monthlyRevenue = paymentsData?.reduce((sum, payment) => sum + (payment.amount || 0), 0) || 0;
+
+      setStats({
+        totalProperties: propertiesCount || 0,
+        totalUsers: (landlordsCount || 0) + (lodgersCount || 0) + (serviceUsersCount || 0),
+        monthlyRevenue: monthlyRevenue,
+        activeStaff: staffCount || 0,
+      });
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
 
   // Fetch system settings
   useEffect(() => {
@@ -350,10 +414,6 @@ const AdminPortal = () => {
           </nav>
 
           <div className="p-4 border-t border-border space-y-1 flex-shrink-0">
-            <Button variant="ghost" className="w-full justify-start" size="lg">
-              <Bell className="w-5 h-5 mr-3" />
-              Notifications
-            </Button>
             <Button variant="ghost" className="w-full justify-start" size="lg" onClick={logout}>
               <LogOut className="w-5 h-5 mr-3" />
               Sign Out
@@ -381,8 +441,11 @@ const AdminPortal = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Total Properties</p>
-                      <p className="text-2xl font-bold text-foreground">124</p>
-                      <p className="text-xs text-green-600 mt-1">+12% this month</p>
+                      {statsLoading ? (
+                        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground my-2" />
+                      ) : (
+                        <p className="text-2xl font-bold text-foreground">{stats.totalProperties}</p>
+                      )}
                     </div>
                     <div className="bg-accent/10 p-3 rounded-full">
                       <Home className="h-6 w-6 text-accent" />
@@ -396,8 +459,11 @@ const AdminPortal = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Total Users</p>
-                      <p className="text-2xl font-bold text-foreground">342</p>
-                      <p className="text-xs text-green-600 mt-1">+8% this month</p>
+                      {statsLoading ? (
+                        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground my-2" />
+                      ) : (
+                        <p className="text-2xl font-bold text-foreground">{stats.totalUsers}</p>
+                      )}
                     </div>
                     <div className="bg-accent/10 p-3 rounded-full">
                       <Users className="h-6 w-6 text-accent" />
@@ -411,8 +477,11 @@ const AdminPortal = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Monthly Revenue</p>
-                      <p className="text-2xl font-bold text-foreground">£125K</p>
-                      <p className="text-xs text-green-600 mt-1">+15% this month</p>
+                      {statsLoading ? (
+                        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground my-2" />
+                      ) : (
+                        <p className="text-2xl font-bold text-foreground">£{stats.monthlyRevenue.toLocaleString()}</p>
+                      )}
                     </div>
                     <div className="bg-accent/10 p-3 rounded-full">
                       <DollarSign className="h-6 w-6 text-accent" />
@@ -426,8 +495,11 @@ const AdminPortal = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Active Staff</p>
-                      <p className="text-2xl font-bold text-foreground">28</p>
-                      <p className="text-xs text-muted-foreground mt-1">Full capacity</p>
+                      {statsLoading ? (
+                        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground my-2" />
+                      ) : (
+                        <p className="text-2xl font-bold text-foreground">{stats.activeStaff}</p>
+                      )}
                     </div>
                     <div className="bg-accent/10 p-3 rounded-full">
                       <Shield className="h-6 w-6 text-accent" />
@@ -439,60 +511,34 @@ const AdminPortal = () => {
 
             {/* Overview Section */}
             {currentTab === "overview" && (
-              <div className="grid lg:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>System Health</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <div className="flex justify-between mb-2">
-                        <span className="text-sm">Server Uptime</span>
-                        <span className="text-sm font-medium">99.9%</span>
-                      </div>
-                      <Progress value={99.9} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>System Health</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <div className="flex justify-between mb-2">
+                      <span className="text-sm">Server Uptime</span>
+                      <span className="text-sm font-medium">99.9%</span>
                     </div>
-                    <div>
-                      <div className="flex justify-between mb-2">
-                        <span className="text-sm">Database Performance</span>
-                        <span className="text-sm font-medium">98.5%</span>
-                      </div>
-                      <Progress value={98.5} />
+                    <Progress value={99.9} />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-2">
+                      <span className="text-sm">Database Performance</span>
+                      <span className="text-sm font-medium">98.5%</span>
                     </div>
-                    <div>
-                      <div className="flex justify-between mb-2">
-                        <span className="text-sm">API Response Time</span>
-                        <span className="text-sm font-medium">145ms avg</span>
-                      </div>
-                      <Progress value={85} />
+                    <Progress value={98.5} />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-2">
+                      <span className="text-sm">API Response Time</span>
+                      <span className="text-sm font-medium">145ms avg</span>
                     </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Recent Activity</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {[
-                        { action: "New property added", user: "Admin Team", time: "10 mins ago" },
-                        { action: "User account created", user: "System", time: "1 hour ago" },
-                        { action: "Payment processed", user: "Finance", time: "2 hours ago" },
-                        { action: "Maintenance completed", user: "Staff", time: "3 hours ago" },
-                      ].map((item, index) => (
-                        <div key={index} className="flex items-start gap-3 pb-3 border-b last:border-0">
-                          <Activity className="w-4 h-4 mt-1 text-primary" />
-                          <div className="flex-1">
-                            <p className="text-sm font-medium">{item.action}</p>
-                            <p className="text-xs text-muted-foreground">{item.user} • {item.time}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
+                    <Progress value={85} />
+                  </div>
+                </CardContent>
+              </Card>
             )}
 
             {/* Users Section */}

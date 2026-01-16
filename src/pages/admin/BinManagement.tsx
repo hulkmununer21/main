@@ -665,4 +665,4 @@ const BinManagement = () => {
   );
 };
 
-export default BinManagement;
+export default BinManagement; 
