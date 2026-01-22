@@ -384,6 +384,7 @@ const NotificationsSMS = () => {
     }
   };
 
+  // ✅ UPDATED: BROADCAST HANDLER WITH SMS SUPPORT
   const handleBroadcast = async () => {
     if (broadcastRecipients.length === 0) return toast.error("Select at least one recipient");
     if (broadcastChannel === 'email' && !broadcastSubject.trim()) return toast.error("Email Subject is required");
@@ -392,30 +393,49 @@ const NotificationsSMS = () => {
     setUploading(true);
 
     try {
-        // ✅ NEW: Email Broadcast Logic (Separated from In-App)
-        if (broadcastChannel === 'email') {
-            const targetEmails = broadcastRecipients
-                .map(id => userDirectory[id]?.email)
-                .filter(email => email && email.includes('@'));
+        // --- 1. SMS LOGIC (New) ---
+        if (broadcastChannel === 'sms') {
+            const targetPhones = broadcastRecipients
+                .map(id => userDirectory[id]?.phone)
+                .filter(phone => phone && phone.length > 5);
 
-            if (targetEmails.length === 0) throw new Error("No valid email addresses found for selected users.");
+            if (targetPhones.length === 0) throw new Error("No valid phone numbers found for selected users.");
 
-            // Call Edge Function
-            const { data, error } = await supabase.functions.invoke('send-broadcast', {
-                body: { emails: targetEmails, subject: broadcastSubject, message: broadcastMessage }
+            // Trigger the new 'send-sms' function
+            const { data, error } = await supabase.functions.invoke('send-sms', {
+                body: { recipients: targetPhones, message: broadcastMessage }
             });
 
             if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
 
-            toast.success(`Email sent to ${data?.count || targetEmails.length} recipients successfully!`);
-        } else {
-            // ✅ EXISTING: In-App / SMS Logic (Preserved exactly)
+            toast.success(`SMS broadcast sent to ${data?.count || targetPhones.length} recipients!`);
+
+        } 
+        // --- 2. EMAIL LOGIC (Existing) ---
+        else if (broadcastChannel === 'email') {
+            const targetEmails = broadcastRecipients
+                .map(id => userDirectory[id]?.email)
+                .filter(email => email && email.includes('@'));
+
+            if (targetEmails.length === 0) throw new Error("No valid email addresses found.");
+
+            const { data, error } = await supabase.functions.invoke('send-broadcast', {
+                body: { channel: 'email', recipients: targetEmails, subject: broadcastSubject, message: broadcastMessage }
+            });
+
+            if (error) throw new Error(error.message);
+            if (data?.error) throw new Error(data.error);
+
+            toast.success(`Email sent successfully!`);
+        } 
+        // --- 3. IN-APP LOGIC (Existing) ---
+        else {
             const payloads = broadcastRecipients.map(uid => ({
                 recipient_id: uid,
                 subject: broadcastSubject || "Admin Notification",
                 message_body: broadcastMessage,
-                notification_type: 'in_app', // Stored as generic, Edge Function reads metadata
+                notification_type: 'in_app',
                 priority: 'high',
                 metadata: {
                     channel: broadcastChannel, 
