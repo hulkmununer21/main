@@ -43,7 +43,7 @@ interface Message {
   content: string;
   created_at: string;
   attachments?: { name: string; type: string; url: string }[];
-  is_read?: boolean; // Added for signal logic
+  is_read?: boolean; 
 }
 
 interface SentNotification {
@@ -82,10 +82,11 @@ const NotificationsSMS = () => {
   const [uploading, setUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   
-  // --- FILE HANDLING STATE ---
+  // --- FILE HANDLING STATE (UPDATED FOR MULTIPLE) ---
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // Changed from single 'selectedFile' to array 'selectedFiles'
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]); 
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null); // Kept for legacy preview logic if needed
 
   // --- UI STATE (BROADCAST) ---
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
@@ -102,7 +103,6 @@ const NotificationsSMS = () => {
       setLoading(true);
 
       try {
-        // A. Build Directory (Updated to include Landlords)
         const [lodgers, staff, serviceUsers, landlords] = await Promise.all([
           supabase.from('lodger_profiles').select('id, full_name, user_id, email, phone'),
           supabase.from('staff_profiles').select('id, full_name, user_id, email, phone'),
@@ -132,7 +132,6 @@ const NotificationsSMS = () => {
         dir[user.id] = { id: user.id, name: "Me (Admin)", role: "Admin" }; 
         setUserDirectory(dir);
 
-        // B. Fetch Threads
         const { data: threadData, error } = await supabase
           .from('message_threads')
           .select('*')
@@ -142,8 +141,6 @@ const NotificationsSMS = () => {
         if (error) throw error;
         setThreads(threadData || []);
 
-        // C. ✅ NEW: Fetch Unread Status for Threads
-        // Get all unread messages that were NOT sent by me
         const { data: unreadData } = await supabase
             .from('messages')
             .select('thread_id')
@@ -165,10 +162,8 @@ const NotificationsSMS = () => {
 
     initData();
 
-    // D. Realtime Listeners (Merged)
     const channel = supabase
       .channel('admin_messaging_global')
-      // Listener 1: Update Thread List Order
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_threads' }, () => {
          if(user) {
              supabase.from('message_threads')
@@ -178,10 +173,8 @@ const NotificationsSMS = () => {
              .then(({ data }) => setThreads(data || []));
          }
       })
-      // Listener 2: ✅ Update Unread Signal
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
           const newMsg = payload.new as Message;
-          // If message is NOT from me, mark thread as unread
           if (newMsg.sender_id !== user?.id) {
               setUnreadThreadIds(prev => new Set(prev).add(newMsg.thread_id));
           }
@@ -209,47 +202,23 @@ const NotificationsSMS = () => {
   }, [isHistoryOpen]);
 
   // --- 3. CHAT LOGIC ---
-  
-  // ✅ UPDATED: Open Thread and Clear Unread Signal
   const openThread = async (threadId: string) => {
     setActiveThreadId(threadId);
-    
-    // Clear local unread signal
-    setUnreadThreadIds(prev => {
-        const next = new Set(prev);
-        next.delete(threadId);
-        return next;
-    });
+    setUnreadThreadIds(prev => { const next = new Set(prev); next.delete(threadId); return next; });
 
-    // Mark as read in DB
     if(user) {
-        await supabase.from('messages')
-            .update({ is_read: true })
-            .eq('thread_id', threadId)
-            .neq('sender_id', user.id);
+        await supabase.from('messages').update({ is_read: true }).eq('thread_id', threadId).neq('sender_id', user.id);
     }
 
-    const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('thread_id', threadId)
-        .order('created_at', { ascending: true });
-      
+    const { data } = await supabase.from('messages').select('*').eq('thread_id', threadId).order('created_at', { ascending: true });
     setMessages(data || []);
     scrollToBottom();
 
-    // Subscribe to this specific thread
     const messageSub = supabase
       .channel(`chat:${threadId}`)
-      .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'messages', 
-        filter: `thread_id=eq.${threadId}` 
-      }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `thread_id=eq.${threadId}` }, (payload) => {
         setMessages((prev) => [...prev, payload.new as Message]);
         scrollToBottom();
-        // If I am active on this thread, keep marking new incoming messages as read
         if (payload.new.sender_id !== user?.id) {
              supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
         }
@@ -259,37 +228,31 @@ const NotificationsSMS = () => {
     return () => { supabase.removeChannel(messageSub); };
   };
 
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }, 100);
-  };
+  const scrollToBottom = () => { setTimeout(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, 100); };
+  const getOtherParticipant = (thread: Thread) => { if (!user) return null; const otherId = thread.participants.find(id => id !== user.id); return otherId ? userDirectory[otherId] : { name: "Unknown User", role: "Unknown" }; };
 
-  const getOtherParticipant = (thread: Thread) => {
-    if (!user) return null;
-    const otherId = thread.participants.find(id => id !== user.id);
-    return otherId ? userDirectory[otherId] : { name: "Unknown User", role: "Unknown" };
-  };
-
-  // --- 4. FILE HANDLING ---
+  // --- 4. FILE HANDLING (UPDATED TO SUPPORT MULTIPLE) ---
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-        const file = e.target.files[0];
-        if (file.size > 5 * 1024 * 1024) {
-            toast.error("File size must be less than 5MB");
-            return;
+    if (e.target.files && e.target.files.length > 0) {
+        const newFiles = Array.from(e.target.files);
+        // Basic filter: Max 10MB per file
+        const validFiles = newFiles.filter(f => f.size <= 10 * 1024 * 1024);
+        
+        if (validFiles.length !== newFiles.length) {
+            toast.error("Some files were skipped (limit 10MB).");
         }
-        setSelectedFile(file);
-        if (file.type.startsWith('image/')) {
-            setPreviewUrl(URL.createObjectURL(file));
-        } else {
-            setPreviewUrl(null);
-        }
+        setSelectedFiles(prev => [...prev, ...validFiles]);
     }
+    // Reset input to allow selecting same file again
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const clearAttachment = () => {
-    setSelectedFile(null);
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const clearAttachments = () => {
+    setSelectedFiles([]);
     setPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -302,21 +265,25 @@ const NotificationsSMS = () => {
         return;
     }
     const hasText = inputText.trim().length > 0;
-    if (!hasText && !selectedFile) return;
+    if (!hasText && selectedFiles.length === 0) return;
 
     let attachments = [];
     setUploading(true);
     
     try {
-        if (selectedFile) {
-            const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9.]/g, '_');
-            const filePath = `${activeThreadId}/${Date.now()}_${sanitizedName}`;
-            
-            const { error: uploadError } = await supabase.storage.from('chat-attachments').upload(filePath, selectedFile);
-            if (uploadError) throw uploadError;
-            
-            const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
-            attachments.push({ name: selectedFile.name, type: selectedFile.type, url: data.publicUrl });
+        // ✅ Updated: Loop through all selected files for Chat
+        if (selectedFiles.length > 0) {
+            const uploadPromises = selectedFiles.map(async (file) => {
+                const sanitizedName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+                const filePath = `${activeThreadId}/${Date.now()}_${sanitizedName}`;
+                
+                const { error: uploadError } = await supabase.storage.from('chat-attachments').upload(filePath, file);
+                if (uploadError) throw uploadError;
+                
+                const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
+                return { name: file.name, type: file.type, url: data.publicUrl };
+            });
+            attachments = await Promise.all(uploadPromises);
         }
 
         const { error } = await supabase.from('messages').insert({
@@ -330,13 +297,13 @@ const NotificationsSMS = () => {
 
         await supabase.from('message_threads')
             .update({ 
-                last_message_preview: selectedFile ? (inputText || "Sent an attachment") : inputText,
+                last_message_preview: selectedFiles.length > 0 ? (inputText || `Sent ${selectedFiles.length} attachments`) : inputText,
                 updated_at: new Date().toISOString() 
             })
             .eq('id', activeThreadId);
 
         setInputText("");
-        clearAttachment();
+        clearAttachments();
     } catch (e: any) {
         toast.error("Failed to send: " + e.message);
     } finally {
@@ -357,7 +324,7 @@ const NotificationsSMS = () => {
         const found = existing?.find(t => t.participants.length === 2 && t.participants.includes(user.id) && t.participants.includes(recipientId));
 
         if (found) {
-            openThread(found.id); // ✅ Use openThread to handle logic
+            openThread(found.id); 
             setIsNewChatOpen(false);
             setUploading(false);
             return;
@@ -374,7 +341,7 @@ const NotificationsSMS = () => {
 
         if (data) {
             setThreads(prev => [data, ...prev]);
-            openThread(data.id); // ✅ Use openThread
+            openThread(data.id);
             setIsNewChatOpen(false);
         }
     } catch (e: any) {
@@ -384,7 +351,7 @@ const NotificationsSMS = () => {
     }
   };
 
-  // ✅ UPDATED: BROADCAST HANDLER WITH SMS SUPPORT
+  // ✅ UPDATED BROADCAST: Loop through files and send ARRAY to backend
   const handleBroadcast = async () => {
     if (broadcastRecipients.length === 0) return toast.error("Select at least one recipient");
     if (broadcastChannel === 'email' && !broadcastSubject.trim()) return toast.error("Email Subject is required");
@@ -393,15 +360,13 @@ const NotificationsSMS = () => {
     setUploading(true);
 
     try {
-        // --- 1. SMS LOGIC (New) ---
         if (broadcastChannel === 'sms') {
             const targetPhones = broadcastRecipients
                 .map(id => userDirectory[id]?.phone)
                 .filter(phone => phone && phone.length > 5);
 
-            if (targetPhones.length === 0) throw new Error("No valid phone numbers found for selected users.");
+            if (targetPhones.length === 0) throw new Error("No valid phones found.");
 
-            // Trigger the new 'send-sms' function
             const { data, error } = await supabase.functions.invoke('send-sms', {
                 body: { recipients: targetPhones, message: broadcastMessage }
             });
@@ -409,28 +374,49 @@ const NotificationsSMS = () => {
             if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
 
-            toast.success(`SMS broadcast sent to ${data?.count || targetPhones.length} recipients!`);
+            toast.success(`SMS sent to ${data?.count} recipients.`);
 
-        } 
-        // --- 2. EMAIL LOGIC (Existing) ---
-        else if (broadcastChannel === 'email') {
+        } else if (broadcastChannel === 'email') {
             const targetEmails = broadcastRecipients
                 .map(id => userDirectory[id]?.email)
                 .filter(email => email && email.includes('@'));
 
-            if (targetEmails.length === 0) throw new Error("No valid email addresses found.");
+            if (targetEmails.length === 0) throw new Error("No valid emails found.");
 
+            // ✅ LOOP: Upload all selected files
+            let attachmentsData: { url: string; name: string; type: string }[] = [];
+            
+            if (selectedFiles.length > 0) {
+                const uploadPromises = selectedFiles.map(async (file) => {
+                    const fileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+                    const { error: uploadError } = await supabase.storage
+                        .from('email-attachments')
+                        .upload(fileName, file);
+                    
+                    if (uploadError) throw uploadError;
+                    
+                    const { data: urlData } = supabase.storage.from('email-attachments').getPublicUrl(fileName);
+                    return { url: urlData.publicUrl, name: file.name, type: file.type };
+                });
+                attachmentsData = await Promise.all(uploadPromises);
+            }
+
+            // ✅ SEND: Pass the ARRAY 'attachments' (plural) to backend
             const { data, error } = await supabase.functions.invoke('send-broadcast', {
-                body: { channel: 'email', recipients: targetEmails, subject: broadcastSubject, message: broadcastMessage }
+                body: { 
+                    recipients: targetEmails, 
+                    subject: broadcastSubject, 
+                    message: broadcastMessage,
+                    attachments: attachmentsData // Pass the array here
+                }
             });
 
             if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
 
             toast.success(`Email sent successfully!`);
-        } 
-        // --- 3. IN-APP LOGIC (Existing) ---
-        else {
+
+        } else {
             const payloads = broadcastRecipients.map(uid => ({
                 recipient_id: uid,
                 subject: broadcastSubject || "Admin Notification",
@@ -446,10 +432,8 @@ const NotificationsSMS = () => {
             }));
 
             const { error } = await supabase.from('notifications').insert(payloads);
-            
             if (error) throw error;
-
-            toast.success(`Broadcast sent to ${broadcastRecipients.length} users via ${broadcastChannel}`);
+            toast.success(`Broadcast sent.`);
         }
 
         // Cleanup
@@ -458,6 +442,7 @@ const NotificationsSMS = () => {
         setBroadcastSubject("");
         setBroadcastRecipients([]);
         setBroadcastChannel('in_app');
+        clearAttachments();
     } catch (err: any) {
         toast.error("Failed to send: " + err.message);
     } finally {
@@ -627,6 +612,37 @@ const NotificationsSMS = () => {
                                 <p className="text-xs text-orange-600 flex items-center gap-1"><AlertCircle className="w-3 h-3"/> Long message: may be split into multiple SMS segments.</p>
                             )}
                         </div>
+
+                        {/* ✅ UPDATED: Multiple Attachment UI */}
+                        {broadcastChannel === 'email' && (
+                            <div className="space-y-2">
+                                <Label>Attachments</Label>
+                                <div className="space-y-2">
+                                    <div className="flex gap-2 items-center">
+                                        <input 
+                                            type="file" 
+                                            ref={fileInputRef} 
+                                            className="hidden" 
+                                            multiple // Allow multiple selection
+                                            onChange={handleFileSelect} 
+                                        />
+                                        <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                                            <Paperclip className="h-4 w-4 mr-2"/> Attach Files
+                                        </Button>
+                                    </div>
+                                    {selectedFiles.length > 0 && (
+                                        <div className="flex flex-wrap gap-2">
+                                            {selectedFiles.map((file, i) => (
+                                                <div key={i} className="flex items-center gap-2 p-2 bg-muted/50 border rounded-md text-xs">
+                                                    <span className="max-w-[150px] truncate">{file.name}</span>
+                                                    <X className="h-3 w-3 cursor-pointer hover:text-red-500" onClick={() => removeFile(i)}/>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setIsBroadcastOpen(false)}>Cancel</Button>
@@ -758,17 +774,21 @@ const NotificationsSMS = () => {
             </div>
 
             <div className="p-4 bg-background border-t">
-              {selectedFile && (
-                <div className="flex items-center gap-3 mb-3 p-2 bg-muted/30 rounded border w-fit">
-                    {previewUrl ? <img src={previewUrl} className="h-10 w-10 object-cover rounded" /> : <div className="h-10 w-10 bg-gray-200 rounded flex items-center justify-center"><File className="h-5 w-5 text-gray-500" /></div>}
-                    <div className="text-xs"><p className="font-medium max-w-[150px] truncate">{selectedFile.name}</p><p className="text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p></div>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-2" onClick={clearAttachment}><X className="h-3 w-3" /></Button>
+              {/* ✅ UPDATED: Multiple Files Preview in Chat Input */}
+              {selectedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                    {selectedFiles.map((file, i) => (
+                        <div key={i} className="flex items-center gap-2 p-2 bg-muted/30 rounded border w-fit text-xs">
+                            <span className="max-w-[120px] truncate">{file.name}</span>
+                            <X className="h-3 w-3 cursor-pointer hover:text-red-500" onClick={() => removeFile(i)}/>
+                        </div>
+                    ))}
                 </div>
               )}
               <div className="flex gap-2 items-end">
                 <div className="flex gap-2 pb-2">
-                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
-                    <Button variant="outline" size="icon" className={`shrink-0 ${selectedFile ? 'text-primary border-primary' : ''}`} onClick={() => fileInputRef.current?.click()}><ImageIcon className="h-4 w-4"/></Button>
+                    <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleFileSelect} />
+                    <Button variant="outline" size="icon" className={`shrink-0 ${selectedFiles.length > 0 ? 'text-primary border-primary' : ''}`} onClick={() => fileInputRef.current?.click()}><ImageIcon className="h-4 w-4"/></Button>
                 </div>
                 <Input value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()} placeholder="Type a message..." className="flex-1 min-h-[2.5rem]" autoFocus />
                 <Button onClick={handleSendMessage} disabled={uploading}>{uploading ? <Loader2 className="h-4 w-4 animate-spin"/> : <Send className="h-4 w-4" />}</Button>
