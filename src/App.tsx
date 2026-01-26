@@ -10,6 +10,9 @@ import ScrollToTop from "./components/ScrollToTop";
 // Public Pages
 import Index from "./pages/Index";
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import VerifyCode from "./pages/VerifyCode";
 import StaffLogin from "./pages/StaffLogin";
 import AdminLogin from "./pages/AdminLogin";
 import ServiceUserLogin from "./pages/ServiceUserLogin";
@@ -86,6 +89,10 @@ const App = () => (
             <Route path="/faq" element={<FAQ />} />
             <Route path="/submit-complaint" element={<SubmitComplaint />} />
             <Route path="/contact" element={<ContactPage />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/verify-code" element={<VerifyCode />} />
+            
 
             {/* --- LODGER ROUTES --- */}
             <Route
