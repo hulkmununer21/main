@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users, LogOut } from "lucide-react";
+import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users, LogOut, X, Star, UploadCloud } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
@@ -43,6 +43,7 @@ interface Property {
   room_count: number;
 }
 
+// ✅ FIXED: Interface uses 'other_image_urls'
 interface Room {
   id: string;
   property_id: string;
@@ -59,8 +60,10 @@ interface Room {
   room_status: string;
   available_from?: string;
   features?: string[];
-  images?: string[];
+  primary_image?: string; 
+  other_image_urls?: string[]; 
   notes?: string;
+  is_featured?: boolean;
 }
 
 interface Landlord {
@@ -90,7 +93,6 @@ interface StaffAssignment {
   staff?: StaffProfile;
 }
 
-// ✅ NEW INTERFACE FOR TENANCY
 interface Tenancy {
   id: string;
   lodger_id: string;
@@ -131,6 +133,8 @@ export default function PropertyManagement() {
 
   const [propertyImagesUploading, setPropertyImagesUploading] = useState(false);
   const [roomImagesUploading, setRoomImagesUploading] = useState(false);
+  
+  const [currentFeature, setCurrentFeature] = useState("");
 
   const [propertyForm, setPropertyForm] = useState({
     landlord_id: "",
@@ -159,6 +163,7 @@ export default function PropertyManagement() {
     images: [] as string[],
   });
 
+  // ✅ FIXED: State uses 'other_image_urls'
   const [roomForm, setRoomForm] = useState({
     room_number: "",
     room_name: "",
@@ -173,8 +178,10 @@ export default function PropertyManagement() {
     room_status: "available",
     available_from: "",
     features: [] as string[],
-    images: [] as string[],
+    primary_image: "", 
+    other_image_urls: [] as string[], // ✅ Renamed here
     notes: "",
+    is_featured: false, 
   });
 
   // Tenancy assignment state
@@ -191,14 +198,13 @@ export default function PropertyManagement() {
   const [lodgers, setLodgers] = useState<Array<{ id: string; full_name: string; email: string }>>([]);
   const [availableRooms, setAvailableRooms] = useState<Room[]>([]);
 
-  // ✅ NEW TENANCY MANAGEMENT STATE
+  // Tenancy management state
   const [tenancies, setTenancies] = useState<Tenancy[]>([]);
   const [manageTenancyOpen, setManageTenancyOpen] = useState(false);
   const [selectedTenancy, setSelectedTenancy] = useState<Tenancy | null>(null);
   const [vacateDate, setVacateDate] = useState("");
   const [deleteTenancyOpen, setDeleteTenancyOpen] = useState(false);
 
-  // Utility to auto-generate payment reference
   const generatePaymentReference = (latestNumber: number = 1): string => {
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -212,10 +218,9 @@ export default function PropertyManagement() {
     loadProperties();
     loadLandlords();
     loadStaff();
-    loadTenancies(); // ✅ NEW: Load Tenancies on mount
+    loadTenancies(); 
   }, []);
 
-  // Load lodgers for tenancy selection
   useEffect(() => {
     const loadLodgersData = async () => {
       const { data, error } = await supabase
@@ -227,7 +232,6 @@ export default function PropertyManagement() {
     loadLodgersData();
   }, []);
 
-  // When property is selected, load available rooms
   useEffect(() => {
     if (!tenancyForm.property_id) {
       setAvailableRooms([]);
@@ -244,7 +248,6 @@ export default function PropertyManagement() {
     loadAvailableRooms();
   }, [tenancyForm.property_id]);
 
-  // When room is selected, fetch rent/deposit amounts
   useEffect(() => {
     if (!tenancyForm.room_id) return;
     const fetchRoomDetails = async () => {
@@ -407,7 +410,6 @@ export default function PropertyManagement() {
     }
   };
 
-  // ✅ NEW LOADER: TENANCIES
   const loadTenancies = async () => {
     try {
       const { data, error } = await supabase
@@ -419,7 +421,7 @@ export default function PropertyManagement() {
           room:rooms(room_number)
         `)
         .order('created_at', { ascending: false });
-      
+       
       if (error) throw error;
       setTenancies(data as any);
     } catch (error) {
@@ -486,8 +488,10 @@ export default function PropertyManagement() {
       room_status: "available",
       available_from: "",
       features: [],
-      images: [],
+      primary_image: "",
+      other_image_urls: [], // ✅ Reset 'other_image_urls'
       notes: "",
+      is_featured: false,
     });
     setRoomDialogOpen(true);
   };
@@ -508,8 +512,10 @@ export default function PropertyManagement() {
       room_status: room.room_status,
       available_from: room.available_from || "",
       features: room.features || [],
-      images: room.images || [],
+      primary_image: room.primary_image || "",
+      other_image_urls: room.other_image_urls || [], // ✅ Map 'other_image_urls'
       notes: room.notes || "",
+      is_featured: !!room.is_featured,
     });
     setRoomDialogOpen(true);
   };
@@ -565,6 +571,7 @@ export default function PropertyManagement() {
     }
   };
 
+  // ✅ FIXED: Submit Room with 'other_image_urls'
   const submitRoomForm = async () => {
     try {
       if (!selectedProperty) return;
@@ -670,7 +677,6 @@ export default function PropertyManagement() {
         if (error) throw error;
         toast.success('Assignment updated');
       } else {
-        // Check for duplicate assignment
         const { data: existing, error: checkError } = await supabase
           .from('staff_property_assignments')
           .select('id')
@@ -740,7 +746,7 @@ export default function PropertyManagement() {
         toast.error('Please fill all required fields.');
         return;
       }
-      
+       
       const { data: tenancy, error: tenancyErr } = await supabase
         .from('tenancies')
         .insert({
@@ -829,7 +835,7 @@ export default function PropertyManagement() {
         end_date: '',
       });
       loadProperties();
-      loadTenancies(); // Refresh tenancy list
+      loadTenancies(); 
     } catch (error) {
       console.error('Error assigning tenancy:', error);
       toast.error('Failed to assign tenancy');
@@ -863,21 +869,42 @@ export default function PropertyManagement() {
     setPropertyForm({ ...propertyForm, images: (propertyForm.images || []).filter(u => u !== url) });
   };
 
-  const uploadRoomImages = async (files: File[]) => {
+  const uploadPrimaryRoomImage = async (files: File[]) => {
+    if (!files.length) return;
+    try {
+      setRoomImagesUploading(true);
+      const file = files[0];
+      const bucket = 'property-images';
+      const path = `primary-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      setRoomForm(prev => ({ ...prev, primary_image: data.publicUrl }));
+      toast.success('Primary image set');
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('Failed to upload primary image');
+    } finally {
+      setRoomImagesUploading(false);
+    }
+  };
+
+  // ✅ FIXED: Updates 'other_image_urls'
+  const uploadRoomGalleryImages = async (files: File[]) => {
     if (!files.length) return;
     try {
       setRoomImagesUploading(true);
       const bucket = 'property-images';
       const urls: string[] = [];
       for (const file of files) {
-        const path = `${Date.now()}-${file.name}`;
+        const path = `gallery-${Date.now()}-${file.name}`;
         const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: false });
         if (error) throw error;
         const { data } = supabase.storage.from(bucket).getPublicUrl(path);
         urls.push(data.publicUrl);
       }
-      setRoomForm({ ...roomForm, images: [...(roomForm.images || []), ...urls] });
-      toast.success('Images uploaded');
+      setRoomForm(prev => ({ ...prev, other_image_urls: [...(prev.other_image_urls || []), ...urls] }));
+      toast.success('Gallery images added');
     } catch (error) {
       console.error('Upload error:', error);
       toast.error('Failed to upload images');
@@ -886,11 +913,29 @@ export default function PropertyManagement() {
     }
   };
 
-  const removeRoomImage = (url: string) => {
-    setRoomForm({ ...roomForm, images: (roomForm.images || []).filter(u => u !== url) });
+  // ✅ FIXED: Removes from 'other_image_urls'
+  const removeRoomGalleryImage = (url: string) => {
+    setRoomForm(prev => ({ ...prev, other_image_urls: (prev.other_image_urls || []).filter(u => u !== url) }));
   };
 
-  // ✅ NEW TENANCY MANAGEMENT HANDLERS
+  const handleAddFeature = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && currentFeature.trim() !== "") {
+        e.preventDefault();
+        setRoomForm(prev => ({
+            ...prev,
+            features: [...(prev.features || []), currentFeature.trim()]
+        }));
+        setCurrentFeature("");
+    }
+  };
+
+  const handleRemoveFeature = (index: number) => {
+    setRoomForm(prev => ({
+        ...prev,
+        features: (prev.features || []).filter((_, i) => i !== index)
+    }));
+  };
+
   const handleManageTenancy = (t: Tenancy) => {
     setSelectedTenancy(t);
     setVacateDate(new Date().toISOString().split('T')[0]);
@@ -961,46 +1006,48 @@ export default function PropertyManagement() {
           <h1 className="text-3xl font-bold">Property Management</h1>
           <p className="text-muted-foreground">Manage properties, rooms, images, and staff assignments</p>
         </div>
-        <Button onClick={() => {
-          setEditingProperty(null);
-          setPropertyForm({
-            landlord_id: "",
-            property_name: "",
-            address_line1: "",
-            address_line2: "",
-            city: "",
-            county: "",
-            postcode: "",
-            country: "United Kingdom",
-            property_type: "house",
-            total_floors: 0,
-            parking_available: false,
-            garden_available: false,
-            furnished: true,
-            pet_friendly: false,
-            smoking_allowed: false,
-            total_bathrooms: 0,
-            total_rooms: 0,
-            epc_rating: "",
-            property_status: "active",
-            monthly_service_charge: 0,
-            council_tax_band: "",
-            bin_collection_day: "",
-            notes: "",
-            images: [],
-          });
-          setPropertyDialogOpen(true);
-        }}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Property
-        </Button>
-        <Button onClick={() => setTenancyDialogOpen(true)} className="ml-2" variant="default">
-          <Plus className="mr-2 h-4 w-4" />
-          Assign Tenancy
-        </Button>
+        <div className="flex gap-2">
+            <Button onClick={() => {
+            setEditingProperty(null);
+            setPropertyForm({
+                landlord_id: "",
+                property_name: "",
+                address_line1: "",
+                address_line2: "",
+                city: "",
+                county: "",
+                postcode: "",
+                country: "United Kingdom",
+                property_type: "house",
+                total_floors: 0,
+                parking_available: false,
+                garden_available: false,
+                furnished: true,
+                pet_friendly: false,
+                smoking_allowed: false,
+                total_bathrooms: 0,
+                total_rooms: 0,
+                epc_rating: "",
+                property_status: "active",
+                monthly_service_charge: 0,
+                council_tax_band: "",
+                bin_collection_day: "",
+                notes: "",
+                images: [],
+            });
+            setPropertyDialogOpen(true);
+            }}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Property
+            </Button>
+            <Button onClick={() => setTenancyDialogOpen(true)} variant="default">
+            <Plus className="mr-2 h-4 w-4" />
+            Assign Tenancy
+            </Button>
+        </div>
       </div>
 
-      {/* --- SECTION 1: PROPERTIES (Existing) --- */}
+      {/* --- SECTION 1: PROPERTIES --- */}
       <Card>
         <CardHeader>
           <CardTitle>Properties</CardTitle>
@@ -1073,7 +1120,7 @@ export default function PropertyManagement() {
         </CardContent>
       </Card>
 
-      {/* --- SECTION 2: TENANCY RECORDS (NEW TABLE BELOW PROPERTIES) --- */}
+      {/* --- SECTION 2: TENANCY RECORDS --- */}
       <Card>
         <CardHeader>
             <CardTitle>Tenancy Records</CardTitle>
@@ -1116,7 +1163,7 @@ export default function PropertyManagement() {
         </CardContent>
       </Card>
 
-      {/* ✅ NEW MANAGE TENANCY DIALOG */}
+      {/* MANAGE TENANCY DIALOG */}
       <Dialog open={manageTenancyOpen} onOpenChange={setManageTenancyOpen}>
         <DialogContent>
             <DialogHeader><DialogTitle>Manage Tenancy</DialogTitle><DialogDescription>Update status or vacate room.</DialogDescription></DialogHeader>
@@ -1152,7 +1199,7 @@ export default function PropertyManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* ✅ NEW DELETE TENANCY CONFIRM */}
+      {/* DELETE TENANCY CONFIRM */}
       <AlertDialog open={deleteTenancyOpen} onOpenChange={setDeleteTenancyOpen}>
         <AlertDialogContent>
             <AlertDialogHeader><AlertDialogTitle>Delete Record?</AlertDialogTitle><AlertDialogDescription>This removes the tenancy history.</AlertDialogDescription></AlertDialogHeader>
@@ -1163,8 +1210,7 @@ export default function PropertyManagement() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* --- ALL ORIGINAL DIALOGS FOLLOW --- */}
-
+      {/* PROPERTY DIALOG */}
       <Dialog open={propertyDialogOpen} onOpenChange={setPropertyDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
@@ -1274,6 +1320,7 @@ export default function PropertyManagement() {
         </DialogContent>
       </Dialog>
 
+      {/* VIEW DIALOG */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
@@ -1326,7 +1373,8 @@ export default function PropertyManagement() {
                         <Badge variant={r.room_status === 'available' ? 'default' : r.room_status === 'occupied' ? 'secondary' : 'outline'}>{r.room_status}</Badge>
                       </TableCell>
                       <TableCell>{(r as Room & { tenantName?: string }).tenantName || <span className="text-muted-foreground">Vacant</span>}</TableCell>
-                      <TableCell>{(r.images || []).length}</TableCell>
+                      {/* ✅ FIXED: Count 'other_image_urls' */}
+                      <TableCell>{(r.other_image_urls || []).length}</TableCell>
                       <TableCell className="text-right space-x-2">
                         <Button size="sm" variant="outline" onClick={() => handleEditRoom(r)}><Pencil className="w-4 h-4" /></Button>
                         <Button size="sm" variant="destructive" onClick={() => handleDeleteRoom(r.id)}><Trash2 className="w-4 h-4" /></Button>
@@ -1364,14 +1412,17 @@ export default function PropertyManagement() {
         </DialogContent>
       </Dialog>
 
+      {/* ROOM DIALOG */}
       <Dialog open={roomDialogOpen} onOpenChange={setRoomDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingRoom ? 'Edit Room' : 'Add Room'}</DialogTitle>
-            <DialogDescription>Manage room details and images.</DialogDescription>
+            <DialogDescription>Manage details, features, images, and status.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+            
+            {/* Row 1: Number, Name, Featured */}
+            <div className="grid grid-cols-3 gap-4 items-end">
               <div className="grid gap-2">
                 <Label>Room Number</Label>
                 <Input value={roomForm.room_number} onChange={(e) => setRoomForm({ ...roomForm, room_number: e.target.value })} />
@@ -1380,7 +1431,21 @@ export default function PropertyManagement() {
                 <Label>Room Name</Label>
                 <Input value={roomForm.room_name} onChange={(e) => setRoomForm({ ...roomForm, room_name: e.target.value })} />
               </div>
+              <div className="flex items-center gap-2 pb-2">
+                <input 
+                    type="checkbox" 
+                    id="is_featured" 
+                    checked={roomForm.is_featured} 
+                    onChange={(e) => setRoomForm({ ...roomForm, is_featured: e.target.checked })} 
+                    className="h-4 w-4 text-primary border-gray-300 rounded"
+                />
+                <Label htmlFor="is_featured" className="flex items-center gap-1 cursor-pointer">
+                    <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" /> Mark as Featured
+                </Label>
+              </div>
             </div>
+
+            {/* Row 2: Type, Rent */}
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label>Type</Label>
@@ -1401,6 +1466,8 @@ export default function PropertyManagement() {
                 <Input type="number" step="0.01" value={roomForm.monthly_rent} onChange={(e) => setRoomForm({ ...roomForm, monthly_rent: Number(e.target.value) })} />
               </div>
             </div>
+
+            {/* Row 3: Deposit, Floor, Size */}
             <div className="grid grid-cols-3 gap-4">
               <div className="grid gap-2">
                 <Label>Deposit (£)</Label>
@@ -1415,6 +1482,8 @@ export default function PropertyManagement() {
                 <Input type="number" step="0.01" value={roomForm.size_sqm} onChange={(e) => setRoomForm({ ...roomForm, size_sqm: Number(e.target.value) })} />
               </div>
             </div>
+
+            {/* Row 4: Status, Available From */}
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label>Status</Label>
@@ -1435,24 +1504,92 @@ export default function PropertyManagement() {
                 <Input type="date" value={roomForm.available_from} onChange={(e) => setRoomForm({ ...roomForm, available_from: e.target.value })} />
               </div>
             </div>
+
+            {/* Features (Tag Input) */}
             <div className="grid gap-2">
-              <Label>Images</Label>
-              <div className="flex items-center gap-2">
-                <Input type="file" multiple accept="image/*" onChange={(e) => uploadRoomImages(Array.from(e.target.files || []))} />
-                <Button type="button" variant="outline" disabled={roomImagesUploading}><Images className="w-4 h-4 mr-2" />Upload</Button>
-              </div>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {(roomForm.images || []).map((url) => (
-                  <div key={url} className="relative">
-                    <img src={url} alt="Room" className="h-16 w-24 object-cover rounded" />
-                    <Button type="button" size="sm" variant="destructive" className="absolute -top-2 -right-2" onClick={() => removeRoomImage(url)}>Remove</Button>
-                  </div>
-                ))}
-              </div>
+                <Label>Features (Press Enter to add)</Label>
+                <Input 
+                    placeholder="e.g. WiFi, En-suite, Desk..." 
+                    value={currentFeature} 
+                    onChange={(e) => setCurrentFeature(e.target.value)}
+                    onKeyDown={handleAddFeature}
+                />
+                <div className="flex flex-wrap gap-2 mt-1">
+                    {(roomForm.features || []).map((feature, idx) => (
+                        <Badge key={idx} variant="secondary" className="px-2 py-1 flex items-center gap-1">
+                            {feature}
+                            <X className="w-3 h-3 cursor-pointer hover:text-red-500" onClick={() => handleRemoveFeature(idx)} />
+                        </Badge>
+                    ))}
+                </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                {/* Primary Image Upload */}
+                <div className="grid gap-2">
+                    <Label>Primary Image (Main Thumbnail)</Label>
+                    <div className="border-2 border-dashed rounded-md p-4 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors relative">
+                        {roomForm.primary_image ? (
+                            <div className="relative w-full h-32">
+                                <img src={roomForm.primary_image} className="w-full h-full object-cover rounded-md" />
+                                <Button 
+                                    size="icon" variant="destructive" className="absolute top-1 right-1 h-6 w-6" 
+                                    onClick={() => setRoomForm(prev => ({ ...prev, primary_image: "" }))}
+                                >
+                                    <X className="w-3 h-3" />
+                                </Button>
+                            </div>
+                        ) : (
+                            <>
+                                <UploadCloud className="w-8 h-8 text-muted-foreground mb-2" />
+                                <p className="text-xs text-muted-foreground">Click to upload Primary Image</p>
+                                <Input 
+                                    type="file" 
+                                    accept="image/*" 
+                                    className="absolute inset-0 opacity-0 cursor-pointer" 
+                                    onChange={(e) => uploadPrimaryRoomImage(Array.from(e.target.files || []))}
+                                />
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {/* Gallery Images Upload */}
+                <div className="grid gap-2">
+                    <Label>Gallery Images (Other Views)</Label>
+                    <div className="border-2 border-dashed rounded-md p-4 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors relative">
+                        <UploadCloud className="w-8 h-8 text-muted-foreground mb-2" />
+                        <p className="text-xs text-muted-foreground">Upload multiple images</p>
+                        <Input 
+                            type="file" multiple accept="image/*" 
+                            className="absolute inset-0 opacity-0 cursor-pointer" 
+                            onChange={(e) => uploadRoomGalleryImages(Array.from(e.target.files || []))}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* ✅ FIXED: Preview maps 'other_image_urls' */}
+            {(roomForm.other_image_urls || []).length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                    {(roomForm.other_image_urls || []).map((url) => (
+                        <div key={url} className="relative group">
+                            <img src={url} alt="Room Gallery" className="h-16 w-24 object-cover rounded border" />
+                            <Button type="button" size="sm" variant="destructive" className="absolute -top-1 -right-1 h-5 w-5 p-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => removeRoomGalleryImage(url)}>
+                                <X className="w-3 h-3" />
+                            </Button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
             <div className="grid gap-2">
-              <Label>Notes</Label>
-              <Textarea value={roomForm.notes} onChange={(e) => setRoomForm({ ...roomForm, notes: e.target.value })} />
+              <Label>Notes / Description</Label>
+              <Textarea 
+                placeholder="Enter details about the room..."
+                value={roomForm.notes} 
+                onChange={(e) => setRoomForm({ ...roomForm, notes: e.target.value })} 
+              />
             </div>
           </div>
           <DialogFooter>
