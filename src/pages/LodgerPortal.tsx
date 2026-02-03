@@ -17,6 +17,7 @@ import { useAuth } from "@/contexts/useAuth";
 import { format, parseISO, startOfWeek, differenceInDays, startOfDay } from "date-fns";
 import SEO from "@/components/SEO";
 import logo from "@/assets/logo.png";
+import { jsPDF } from "jspdf"; // ✅ Added import
 
 // === SUB-COMPONENTS ===
 import LodgerOverview from "./lodger/LodgerOverview";
@@ -68,7 +69,7 @@ const LodgerPortal = () => {
   // UI State
   const [paymentAmount, setPaymentAmount] = useState("750");
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
-  const [processingPaymentId, setProcessingPaymentId] = useState<string | null>(null); // ✅ For simulation
+  const [processingPaymentId, setProcessingPaymentId] = useState<string | null>(null); 
 
   // Profile Modal State
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -78,6 +79,108 @@ const LodgerPortal = () => {
   });
   const [passwordForm, setPasswordForm] = useState({ newPassword: "", confirmPassword: "" });
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // ✅ RECEIPT GENERATOR
+  const generateReceipt = (payment: PaymentHistory) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    
+    // 1. Logo
+    try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, 10, 30, 30); } catch (e) {}
+
+    // 2. Title
+    doc.setFont("times", "bold");
+    doc.setFontSize(16);
+    doc.text("DEPOSIT RECEIPT", pageWidth / 2, 50, { align: "center" });
+
+    // 3. Metadata
+    doc.setFontSize(11);
+    doc.setFont("times", "normal");
+    let yPos = 65;
+    const lineHeight = 8;
+
+    doc.text(`Receipt No: ${payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`Date: ${format(parseISO(payment.payment_date), 'd/MM/yyyy')}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`Received From: ${lodgerProfile?.full_name || "Lodger"}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`Street Address: ${tenancy?.properties?.property_name || "Address on File"}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`City, State, Zip: Wolverhampton (Ref Room ${tenancy?.rooms?.room_number || "N/A"})`, 20, yPos);
+
+    // 4. Value
+    yPos += 15;
+    doc.setFont("times", "bold");
+    doc.text("Deposit Value", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += lineHeight;
+    doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, 20, yPos);
+    
+    // 5. Method
+    yPos += lineHeight;
+    const method = payment.payment_method?.toLowerCase() || "";
+    doc.rect(20, yPos - 4, 4, 4); 
+    if (method.includes('check') || method.includes('cheque')) doc.text("x", 21, yPos - 1);
+    doc.text("Check", 28, yPos);
+
+    doc.rect(60, yPos - 4, 4, 4);
+    if (method.includes('cash')) doc.text("x", 61, yPos - 1);
+    doc.text("Cash Deposit", 68, yPos);
+
+    doc.rect(110, yPos - 4, 4, 4);
+    if (!method.includes('check') && !method.includes('cash')) doc.text("x", 111, yPos - 1);
+    doc.text(`Other: ${!method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "_______________________"}`, 118, yPos);
+
+    // 6. Type
+    yPos += 15;
+    doc.setFont("times", "bold");
+    doc.text("Deposit Type", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += lineHeight;
+    const isRent = payment.payment_type?.toLowerCase() === 'rent';
+    doc.text(isRent ? `Payment is for: Rent` : "Deposit is for: Security & Damage", 20, yPos);
+    yPos += lineHeight;
+    doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, 20, yPos);
+
+    // 7. Legal (Strict)
+    yPos += 15;
+    const legalText = [
+        "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
+        `This deposit is associated with the lodging agreement dated ${format(parseISO(payment.payment_date), 'd/MM/yyyy')} between the parties.`,
+        "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
+        "Note: The above amount has been received and will be held securely by Domūs Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
+        "This receipt was automatically generated and issued by Domūs Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
+        "By proceeding with the agreement on the lodging agreement, the lodger acknowledges and agrees to the terms associated with this deposit."
+    ];
+
+    doc.setFontSize(10);
+    legalText.forEach(text => {
+        const splitText = doc.splitTextToSize(text, pageWidth - 40);
+        doc.text(splitText, 20, yPos);
+        yPos += (splitText.length * 5) + 3;
+    });
+
+    // 8. Footer
+    yPos += 10;
+    doc.setFont("times", "bold");
+    doc.text("Contact Us", 20, yPos);
+    yPos += 6;
+    doc.setFont("times", "normal");
+    doc.text("If you have any questions or concerns, contact:", 20, yPos);
+    yPos += 6;
+    doc.setFont("times", "bold");
+    doc.text("Domūs Manutentio et Servitia Ltd", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += 5;
+    doc.text("Registration No: 16395957", 20, yPos);
+    yPos += 5;
+    doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", 20, yPos);
+    yPos += 5;
+    doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", 20, yPos);
+
+    doc.save(`Receipt_${payment.payment_reference || payment.id}.pdf`);
+  };
 
   // --- DATA FETCHING ---
   const fetchAllData = async () => {
@@ -424,7 +527,8 @@ const LodgerPortal = () => {
                                                         <td className="p-4 align-middle text-sm text-muted-foreground">{pay.payment_method || "Transfer"}</td>
                                                         <td className="p-4 align-middle font-bold">£{pay.amount}</td>
                                                         <td className="p-4 align-middle">{getStatusBadge(pay.payment_status)}</td>
-                                                        <td className="p-4 align-middle text-right"><Button variant="ghost" size="icon" className="h-8 w-8"><Download className="h-4 w-4"/></Button></td>
+                                                        {/* ✅ Download Button Action */}
+                                                        <td className="p-4 align-middle text-right"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => generateReceipt(pay)}><Download className="h-4 w-4"/></Button></td>
                                                     </tr>
                                                 ))}
                                             </tbody>

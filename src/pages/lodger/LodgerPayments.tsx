@@ -11,6 +11,7 @@ import { LodgerProfile } from "@/contexts/AuthContextTypes";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import { format, parseISO } from "date-fns";
+import { jsPDF } from "jspdf";
 
 const LodgerPayments = () => {
   const { logout, user } = useAuth();
@@ -22,11 +23,12 @@ const LodgerPayments = () => {
   // ✅ Updated Interface to match Supabase Join Response
   interface Payment {
     id: string;
-    amount: number; // Changed from amount_paid to amount to match standard schema usually
+    amount: number;
     payment_date: string;
     payment_status: string;
     payment_method?: string;
     payment_reference?: string;
+    payment_type?: string; // Added to distinguish Rent vs Deposit
     // Relations
     properties?: {
       property_name: string;
@@ -42,7 +44,6 @@ const LodgerPayments = () => {
 
       try {
         setLoading(true);
-        // ✅ Updated Query to fetch related Property and Room names
         const { data, error } = await supabase
           .from('payments')
           .select(`
@@ -68,6 +69,123 @@ const LodgerPayments = () => {
 
     fetchPayments();
   }, [lodgerProfile?.id]);
+
+  // ✅ RECEIPT GENERATION LOGIC
+  const generateReceipt = (payment: Payment) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    
+    // --- 1. HEADER & LOGO ---
+    // Note: In production, convert your imported 'logo' to base64. 
+    // Here we assume 'logo' is a usable path. If it fails, use a base64 string.
+    try {
+        doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, 10, 30, 30); 
+    } catch (e) {
+        console.warn("Logo load failed, skipping image");
+    }
+
+    doc.setFont("times", "bold");
+    doc.setFontSize(16);
+    doc.text("DEPOSIT RECEIPT", pageWidth / 2, 50, { align: "center" });
+
+    // --- 2. METADATA ---
+    doc.setFontSize(11);
+    doc.setFont("times", "normal");
+    
+    let yPos = 65;
+    const lineHeight = 8;
+
+    doc.text(`Receipt No: ${payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`Date: ${format(parseISO(payment.payment_date), 'd/MM/yyyy')}`, 20, yPos);
+    yPos += lineHeight;
+    doc.text(`Received From: ${lodgerProfile?.full_name || "Lodger"}`, 20, yPos);
+    yPos += lineHeight;
+    // Assuming address is in profile or using property address
+    doc.text(`Street Address: ${payment.properties?.property_name || "Address on File"}`, 20, yPos);
+    yPos += lineHeight;
+    // Assuming Room as secondary address identifier
+    doc.text(`Details: Room ${payment.rooms?.room_number || "N/A"}`, 20, yPos);
+
+    // --- 3. VALUE ---
+    yPos += 15;
+    doc.setFont("times", "bold");
+    doc.text("Deposit Value", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += lineHeight;
+    doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, 20, yPos);
+    
+    // --- 4. PAYMENT METHOD ---
+    yPos += lineHeight;
+    const method = payment.payment_method?.toLowerCase() || "";
+    
+    // Checkboxes
+    doc.rect(20, yPos - 4, 4, 4); // Box 1
+    if (method.includes('check') || method.includes('cheque')) doc.text("x", 21, yPos - 1);
+    doc.text("Check", 28, yPos);
+
+    doc.rect(60, yPos - 4, 4, 4); // Box 2
+    if (method.includes('cash')) doc.text("x", 61, yPos - 1);
+    doc.text("Cash Deposit", 68, yPos);
+
+    doc.rect(110, yPos - 4, 4, 4); // Box 3
+    if (!method.includes('check') && !method.includes('cash')) doc.text("x", 111, yPos - 1);
+    doc.text(`Other: ${!method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "_______________________"}`, 118, yPos);
+
+    // --- 5. DEPOSIT TYPE ---
+    yPos += 15;
+    doc.setFont("times", "bold");
+    doc.text("Deposit Type", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += lineHeight;
+    
+    // Dynamic text based on payment type (Rent vs Security)
+    const isRent = payment.payment_type?.toLowerCase() === 'rent';
+    const typeText = isRent ? `Payment is for: Rent (${format(parseISO(payment.payment_date), 'MMMM yyyy')})` : "Deposit is for: Security & Damage";
+    doc.text(typeText, 20, yPos);
+    
+    yPos += lineHeight;
+    doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, 20, yPos);
+
+    // --- 6. LEGAL TEXT (Strictly from Doc) ---
+    yPos += 15;
+    const legalText = [
+        "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
+        `This deposit is associated with the lodging agreement dated ${format(parseISO(payment.payment_date), 'd/MM/yyyy')} between the parties.`, // Using payment date as proxy if move-in unavailable
+        "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
+        "Note: The above amount has been received and will be held securely by Domus Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
+        "This receipt was automatically generated and issued by Domus Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
+        "By proceeding with the agreement on the lodging agreement, the lodger acknowledges and agrees to the terms associated with this deposit."
+    ];
+
+    doc.setFontSize(10);
+    legalText.forEach(text => {
+        const splitText = doc.splitTextToSize(text, pageWidth - 40);
+        doc.text(splitText, 20, yPos);
+        yPos += (splitText.length * 5) + 3;
+    });
+
+    // --- 7. FOOTER ---
+    yPos += 10;
+    doc.setFont("times", "bold");
+    doc.text("Contact Us", 20, yPos);
+    yPos += 6;
+    doc.setFont("times", "normal");
+    doc.text("If you have any questions or concerns, contact:", 20, yPos);
+    yPos += 6;
+    doc.setFont("times", "bold");
+    doc.text("Domus Manutentio et Servitia Ltd", 20, yPos);
+    doc.setFont("times", "normal");
+    yPos += 5;
+    doc.text("Registration No: 16395957", 20, yPos);
+    yPos += 5;
+    doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", 20, yPos);
+    yPos += 5;
+    doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", 20, yPos);
+
+    // Save
+    doc.save(`Receipt_${payment.payment_reference || payment.id}.pdf`);
+  };
 
   const getPaymentStatusBadge = (status: string) => {
     switch (status?.toLowerCase()) {
@@ -163,7 +281,12 @@ const LodgerPayments = () => {
                         <p className="font-bold text-lg">
                           £{Number(payment.amount).toFixed(2)}
                         </p>
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                        <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-8 w-8 p-0"
+                            onClick={() => generateReceipt(payment)}
+                        >
                           <Download className="h-4 w-4" />
                           <span className="sr-only">Download</span>
                         </Button>
