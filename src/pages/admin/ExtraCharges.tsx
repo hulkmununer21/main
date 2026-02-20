@@ -85,7 +85,7 @@ const ExtraCharges = () => {
     amount: "",
     charge_type: "",
     due_date: format(new Date().setDate(new Date().getDate() + 7), 'yyyy-MM-dd'),
-    description: ""
+    reason: ""
   });
 
   // --- DATA FETCHING ---
@@ -240,7 +240,7 @@ const ExtraCharges = () => {
       if (!selectedTenancy) throw new Error("Invalid tenancy selected");
 
       const dbChargeType = CHARGE_TYPE_MAP[chargeForm.charge_type];
-      const chargeReason = chargeForm.description || chargeForm.charge_type;
+      const chargeReason = chargeForm.reason || chargeForm.charge_type;
 
       // 1. Create the Charge
       const payload = {
@@ -290,7 +290,7 @@ const ExtraCharges = () => {
         amount: "",
         charge_type: "",
         due_date: format(new Date().setDate(new Date().getDate() + 7), 'yyyy-MM-dd'),
-        description: ""
+        reason: ""
       });
       fetchData();
 
@@ -323,7 +323,7 @@ const ExtraCharges = () => {
             payment_date: new Date().toISOString(),
             payment_method: 'bank_transfer', 
             payment_reference: paymentRef,
-            description: `Payment for charge: ${charge.reason || charge.charge_type}` 
+            notes: `Payment for charge: ${charge.reason || charge.charge_type}` 
           })
           .select('id')
           .single();
@@ -590,8 +590,8 @@ const ExtraCharges = () => {
                 <label className="text-sm font-medium">Description / Details</label>
                 <Input 
                     placeholder="Specific details (optional)" 
-                    value={chargeForm.description}
-                    onChange={e => setChargeForm(f => ({ ...f, description: e.target.value }))}
+                    value={chargeForm.reason}
+                    onChange={e => setChargeForm(f => ({ ...f, reason: e.target.value }))}
                 />
             </div>
 

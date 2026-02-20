@@ -20,7 +20,6 @@ const LodgerPayments = () => {
 
   const lodgerProfile = user?.profile as LodgerProfile;
 
-  // ✅ Updated Interface to match Supabase Join Response
   interface Payment {
     id: string;
     amount: number;
@@ -28,29 +27,19 @@ const LodgerPayments = () => {
     payment_status: string;
     payment_method?: string;
     payment_reference?: string;
-    payment_type?: string; // Added to distinguish Rent vs Deposit
-    // Relations
-    properties?: {
-      property_name: string;
-    } | null;
-    rooms?: {
-      room_number: string;
-    } | null;
+    payment_type?: string;
+    properties?: { property_name: string } | null;
+    rooms?: { room_number: string } | null;
   }
 
   useEffect(() => {
     const fetchPayments = async () => {
       if (!lodgerProfile?.id) return;
-
       try {
         setLoading(true);
         const { data, error } = await supabase
           .from('payments')
-          .select(`
-            *,
-            properties (property_name),
-            rooms (room_number)
-          `)
+          .select(`*, properties (property_name), rooms (room_number)`)
           .eq('lodger_id', lodgerProfile.id)
           .order('payment_date', { ascending: false });
         
@@ -66,92 +55,115 @@ const LodgerPayments = () => {
         setLoading(false);
       }
     };
-
     fetchPayments();
   }, [lodgerProfile?.id]);
 
-  // ✅ RECEIPT GENERATION LOGIC
+  // ✅ FIXED: Horizontal Overlap Issue Solved
   const generateReceipt = (payment: Payment) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const maxLineWidth = pageWidth - (margin * 2);
     
-    // --- 1. HEADER & LOGO ---
-    // Note: In production, convert your imported 'logo' to base64. 
-    // Here we assume 'logo' is a usable path. If it fails, use a base64 string.
-    try {
-        doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, 10, 30, 30); 
+    let yPos = 20;
+
+    // 1. Logo & Header
+    try { 
+        doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, yPos, 30, 30); 
+        yPos += 35;
     } catch (e) {
-        console.warn("Logo load failed, skipping image");
+        yPos += 10;
     }
 
     doc.setFont("times", "bold");
     doc.setFontSize(16);
-    doc.text("DEPOSIT RECEIPT", pageWidth / 2, 50, { align: "center" });
+    doc.text("DEPOSIT RECEIPT", pageWidth / 2, yPos, { align: "center" });
+    yPos += 15;
 
-    // --- 2. METADATA ---
+    // 2. Metadata
     doc.setFontSize(11);
     doc.setFont("times", "normal");
+    const lineHeight = 7;
+
+    const receiptDate = payment.payment_date ? format(parseISO(payment.payment_date), 'd/MM/yyyy') : format(new Date(), 'd/MM/yyyy');
+
+    doc.text(`Receipt No: ${payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`}`, margin, yPos);
+    yPos += lineHeight;
     
-    let yPos = 65;
-    const lineHeight = 8;
+    doc.text(`Date: ${receiptDate}`, margin, yPos);
+    yPos += lineHeight;
 
-    doc.text(`Receipt No: ${payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`}`, 20, yPos);
-    yPos += lineHeight;
-    doc.text(`Date: ${format(parseISO(payment.payment_date), 'd/MM/yyyy')}`, 20, yPos);
-    yPos += lineHeight;
-    doc.text(`Received From: ${lodgerProfile?.full_name || "Lodger"}`, 20, yPos);
-    yPos += lineHeight;
-    // Assuming address is in profile or using property address
-    doc.text(`Street Address: ${payment.properties?.property_name || "Address on File"}`, 20, yPos);
-    yPos += lineHeight;
-    // Assuming Room as secondary address identifier
-    doc.text(`Details: Room ${payment.rooms?.room_number || "N/A"}`, 20, yPos);
+    const nameText = `Received From: ${lodgerProfile?.full_name || "Lodger"}`;
+    doc.text(doc.splitTextToSize(nameText, maxLineWidth), margin, yPos);
+    yPos += lineHeight * (doc.splitTextToSize(nameText, maxLineWidth).length);
 
-    // --- 3. VALUE ---
-    yPos += 15;
+    const addressText = `Street Address: ${payment.properties?.property_name || "Address on File"}`;
+    doc.text(doc.splitTextToSize(addressText, maxLineWidth), margin, yPos);
+    yPos += lineHeight * (doc.splitTextToSize(addressText, maxLineWidth).length);
+
+    doc.text(`Details: Room ${payment.rooms?.room_number || "N/A"}`, margin, yPos);
+    yPos += 12;
+
+    // 3. Value
     doc.setFont("times", "bold");
-    doc.text("Deposit Value", 20, yPos);
+    doc.text("Deposit Value", margin, yPos);
+    yPos += lineHeight;
     doc.setFont("times", "normal");
+    doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, margin, yPos);
     yPos += lineHeight;
-    doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, 20, yPos);
     
-    // --- 4. PAYMENT METHOD ---
-    yPos += lineHeight;
+    // 4. Method (Dynamic Positioning to prevent overlap)
     const method = payment.payment_method?.toLowerCase() || "";
+    let currentX = margin;
+
+    // Checkbox 1: Check
+    doc.rect(currentX, yPos - 4, 4, 4); 
+    if (method.includes('check') || method.includes('cheque')) doc.text("x", currentX + 1, yPos - 1);
+    doc.text("Check", currentX + 6, yPos);
     
-    // Checkboxes
-    doc.rect(20, yPos - 4, 4, 4); // Box 1
-    if (method.includes('check') || method.includes('cheque')) doc.text("x", 21, yPos - 1);
-    doc.text("Check", 28, yPos);
+    // Calculate width of "Check" + spacing
+    currentX += doc.getTextWidth("Check") + 20; 
 
-    doc.rect(60, yPos - 4, 4, 4); // Box 2
-    if (method.includes('cash')) doc.text("x", 61, yPos - 1);
-    doc.text("Cash Deposit", 68, yPos);
+    // Checkbox 2: Cash Deposit
+    doc.rect(currentX, yPos - 4, 4, 4);
+    if (method.includes('cash')) doc.text("x", currentX + 1, yPos - 1);
+    doc.text("Cash Deposit", currentX + 6, yPos);
 
-    doc.rect(110, yPos - 4, 4, 4); // Box 3
-    if (!method.includes('check') && !method.includes('cash')) doc.text("x", 111, yPos - 1);
-    doc.text(`Other: ${!method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "_______________________"}`, 118, yPos);
+    // Calculate width + spacing
+    currentX += doc.getTextWidth("Cash Deposit") + 20;
 
-    // --- 5. DEPOSIT TYPE ---
-    yPos += 15;
+    // Checkbox 3: Other
+    doc.rect(currentX, yPos - 4, 4, 4);
+    if (!method.includes('check') && !method.includes('cash')) doc.text("x", currentX + 1, yPos - 1);
+    
+    const otherTextPrefix = "Other: ";
+    doc.text(otherTextPrefix, currentX + 6, yPos);
+    
+    const otherValue = !method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "________________";
+    
+    // Ensure "Other" value wraps if it's too long
+    const availableWidth = pageWidth - (currentX + 6 + doc.getTextWidth(otherTextPrefix)) - margin;
+    const splitOther = doc.splitTextToSize(otherValue, availableWidth);
+    doc.text(splitOther, currentX + 6 + doc.getTextWidth(otherTextPrefix), yPos);
+    
+    yPos += 12;
+
+    // 5. Type
     doc.setFont("times", "bold");
-    doc.text("Deposit Type", 20, yPos);
+    doc.text("Deposit Type", margin, yPos);
+    yPos += lineHeight;
     doc.setFont("times", "normal");
-    yPos += lineHeight;
-    
-    // Dynamic text based on payment type (Rent vs Security)
     const isRent = payment.payment_type?.toLowerCase() === 'rent';
-    const typeText = isRent ? `Payment is for: Rent (${format(parseISO(payment.payment_date), 'MMMM yyyy')})` : "Deposit is for: Security & Damage";
-    doc.text(typeText, 20, yPos);
-    
+    doc.text(isRent ? `Payment is for: Rent` : "Deposit is for: Security & Damage", margin, yPos);
     yPos += lineHeight;
-    doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, 20, yPos);
+    doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, margin, yPos);
+    yPos += 12;
 
-    // --- 6. LEGAL TEXT (Strictly from Doc) ---
-    yPos += 15;
+    // 6. Legal Text
     const legalText = [
         "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
-        `This deposit is associated with the lodging agreement dated ${format(parseISO(payment.payment_date), 'd/MM/yyyy')} between the parties.`, // Using payment date as proxy if move-in unavailable
+        `This deposit is associated with the lodging agreement dated ${receiptDate} between the parties.`,
         "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
         "Note: The above amount has been received and will be held securely by Domus Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
         "This receipt was automatically generated and issued by Domus Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
@@ -159,31 +171,48 @@ const LodgerPayments = () => {
     ];
 
     doc.setFontSize(10);
+    const legalLineHeight = 5;
+
     legalText.forEach(text => {
-        const splitText = doc.splitTextToSize(text, pageWidth - 40);
-        doc.text(splitText, 20, yPos);
-        yPos += (splitText.length * 5) + 3;
+        // Page break logic
+        if (yPos > pageHeight - 50) { 
+            doc.addPage();
+            yPos = 20; 
+        }
+        
+        const splitText = doc.splitTextToSize(text, maxLineWidth);
+        doc.text(splitText, margin, yPos);
+        yPos += (splitText.length * legalLineHeight) + 3;
     });
 
-    // --- 7. FOOTER ---
-    yPos += 10;
-    doc.setFont("times", "bold");
-    doc.text("Contact Us", 20, yPos);
-    yPos += 6;
-    doc.setFont("times", "normal");
-    doc.text("If you have any questions or concerns, contact:", 20, yPos);
-    yPos += 6;
-    doc.setFont("times", "bold");
-    doc.text("Domus Manutentio et Servitia Ltd", 20, yPos);
-    doc.setFont("times", "normal");
-    yPos += 5;
-    doc.text("Registration No: 16395957", 20, yPos);
-    yPos += 5;
-    doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", 20, yPos);
-    yPos += 5;
-    doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", 20, yPos);
+    // 7. Footer
+    if (yPos > pageHeight - 45) {
+        doc.addPage();
+        yPos = 20;
+    } else {
+        yPos += 5;
+    }
 
-    // Save
+    doc.setDrawColor(200);
+    doc.line(margin, yPos, pageWidth - margin, yPos);
+    yPos += 8;
+
+    doc.setFont("times", "bold");
+    doc.text("Contact Us", margin, yPos);
+    yPos += 6;
+    doc.setFont("times", "normal");
+    doc.text("If you have any questions or concerns, contact:", margin, yPos);
+    yPos += 6;
+    doc.setFont("times", "bold");
+    doc.text("Domus Manutentio et Servitia Ltd", margin, yPos);
+    yPos += 5;
+    doc.setFont("times", "normal");
+    doc.text("Registration No: 16395957", margin, yPos);
+    yPos += 5;
+    doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", margin, yPos);
+    yPos += 5;
+    doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", margin, yPos);
+
     doc.save(`Receipt_${payment.payment_reference || payment.id}.pdf`);
   };
 
@@ -203,93 +232,48 @@ const LodgerPayments = () => {
 
   return (
     <>
-      <SEO 
-        title="Payments - Lodger Portal"
-        description="View your payment history and manage rent payments"
-      />
-
+      <SEO title="Payments - Lodger Portal" description="View your payment history" />
       <div className="min-h-screen bg-background">
         <div className="container mx-auto px-4 py-6 pb-24 md:pb-6">
-          {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img src={logo} alt="Logo" className="h-10 w-10 rounded-lg" />
-              <div>
-                <h1 className="text-2xl font-bold text-foreground">Payments</h1>
-                <p className="text-sm text-muted-foreground">Financial overview</p>
-              </div>
+              <div><h1 className="text-2xl font-bold text-foreground">Payments</h1><p className="text-sm text-muted-foreground">Financial overview</p></div>
             </div>
             <div className="flex gap-2">
-              <Button variant="ghost" size="icon">
-                <Bell className="h-5 w-5" />
-              </Button>
-              <Button variant="ghost" size="icon" onClick={logout}>
-                <LogOut className="h-5 w-5" />
-              </Button>
+              <Button variant="ghost" size="icon"><Bell className="h-5 w-5" /></Button>
+              <Button variant="ghost" size="icon" onClick={logout}><LogOut className="h-5 w-5" /></Button>
             </div>
           </div>
 
-          {/* Payment History */}
           <Card className="border-border shadow-sm">
-            <CardHeader>
-              <CardTitle>Payment History</CardTitle>
-              <CardDescription>View all your transaction records</CardDescription>
-            </CardHeader>
+            <CardHeader><CardTitle>Payment History</CardTitle><CardDescription>View all your transaction records</CardDescription></CardHeader>
             <CardContent>
               {loading ? (
-                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                    <Clock className="h-8 w-8 animate-spin mb-2 opacity-50" />
-                    <p>Loading history...</p>
-                </div>
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground"><Clock className="h-8 w-8 animate-spin mb-2 opacity-50" /><p>Loading history...</p></div>
               ) : payments.length === 0 ? (
-                <div className="text-center py-8 border-2 border-dashed rounded-lg">
-                    <p className="text-muted-foreground">No payment records found.</p>
-                </div>
+                <div className="text-center py-8 border-2 border-dashed rounded-lg"><p className="text-muted-foreground">No payment records found.</p></div>
               ) : (
                 <div className="space-y-3">
                   {payments.map((payment) => (
-                    <div
-                      key={payment.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/40 transition-all gap-4 bg-card"
-                    >
+                    <div key={payment.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/40 transition-all gap-4 bg-card">
                       <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2">
-                            <span className="font-semibold text-foreground">
-                            {payment.payment_date 
-                                ? format(parseISO(payment.payment_date), 'dd MMM yyyy')
-                                : "Date N/A"}
-                            </span>
+                            <span className="font-semibold text-foreground">{payment.payment_date ? format(parseISO(payment.payment_date), 'dd MMM yyyy') : "Date N/A"}</span>
                             {getPaymentStatusBadge(payment.payment_status)}
                         </div>
-                        
                         <div className="text-sm text-muted-foreground flex flex-col sm:flex-row sm:gap-4">
                             <span>Ref: {payment.payment_reference || "N/A"}</span>
                             <span className="hidden sm:inline">•</span>
                             <span>{payment.payment_method || "Bank Transfer"}</span>
                         </div>
-
                         {(payment.properties?.property_name || payment.rooms?.room_number) && (
-                          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                            <BuildingIcon className="h-3 w-3"/>
-                            {payment.properties?.property_name || "Unknown Property"} 
-                            {payment.rooms?.room_number ? ` (Room ${payment.rooms.room_number})` : ""}
-                          </p>
+                          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1"><BuildingIcon className="h-3 w-3"/>{payment.properties?.property_name || "Unknown Property"} {payment.rooms?.room_number ? ` (Room ${payment.rooms.room_number})` : ""}</p>
                         )}
                       </div>
-
                       <div className="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-t-0 pt-3 sm:pt-0">
-                        <p className="font-bold text-lg">
-                          £{Number(payment.amount).toFixed(2)}
-                        </p>
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-8 w-8 p-0"
-                            onClick={() => generateReceipt(payment)}
-                        >
-                          <Download className="h-4 w-4" />
-                          <span className="sr-only">Download</span>
-                        </Button>
+                        <p className="font-bold text-lg">£{Number(payment.amount).toFixed(2)}</p>
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => generateReceipt(payment)}><Download className="h-4 w-4" /><span className="sr-only">Download</span></Button>
                       </div>
                     </div>
                   ))}
@@ -297,21 +281,14 @@ const LodgerPayments = () => {
               )}
             </CardContent>
           </Card>
-
-          {/* Bottom padding for mobile nav */}
           <div className="h-20 md:h-0"></div>
         </div>
       </div>
-
-      {/* Mobile Bottom Navigation */}
       <BottomNav role="lodger" />
     </>
   );
 };
 
-// Helper Icon Component
-const BuildingIcon = ({ className }: { className?: string }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M8 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M16 14h.01"/></svg>
-);
+const BuildingIcon = ({ className }: { className?: string }) => (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="16" height="20" x="4" y="2" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M8 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M16 14h.01"/></svg>);
 
 export default LodgerPayments;

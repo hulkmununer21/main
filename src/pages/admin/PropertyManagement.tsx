@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users, LogOut, X, Star, UploadCloud } from "lucide-react";
+import { Plus, DoorOpen, Search, Trash2, Pencil, Images, Users, LogOut, X, Star, UploadCloud, AlertCircle, Loader2, Eye, Receipt } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
@@ -43,7 +43,6 @@ interface Property {
   room_count: number;
 }
 
-// ✅ FIXED: Interface uses 'other_image_urls'
 interface Room {
   id: string;
   property_id: string;
@@ -101,10 +100,20 @@ interface Tenancy {
   start_date: string;
   end_date?: string;
   monthly_rent: number;
+  deposit_amount: number;
+  deposit_status: string;
   tenancy_status: 'active' | 'pending' | 'ended' | 'evicted';
   lodger?: { full_name: string; email: string };
   property?: { property_name: string };
   room?: { room_number: string };
+}
+
+interface ExtraCharge {
+  id: string;
+  amount: number;
+  reason?: string;
+  charge_type?: string;
+  created_at: string;
 }
 
 export default function PropertyManagement() {
@@ -163,7 +172,6 @@ export default function PropertyManagement() {
     images: [] as string[],
   });
 
-  // ✅ FIXED: State uses 'other_image_urls'
   const [roomForm, setRoomForm] = useState({
     room_number: "",
     room_name: "",
@@ -179,12 +187,11 @@ export default function PropertyManagement() {
     available_from: "",
     features: [] as string[],
     primary_image: "", 
-    other_image_urls: [] as string[], // ✅ Renamed here
+    other_image_urls: [] as string[], 
     notes: "",
     is_featured: false, 
   });
 
-  // Tenancy assignment state
   const [tenancyDialogOpen, setTenancyDialogOpen] = useState(false);
   const [tenancyForm, setTenancyForm] = useState({
     lodger_id: '',
@@ -198,12 +205,22 @@ export default function PropertyManagement() {
   const [lodgers, setLodgers] = useState<Array<{ id: string; full_name: string; email: string }>>([]);
   const [availableRooms, setAvailableRooms] = useState<Room[]>([]);
 
-  // Tenancy management state
   const [tenancies, setTenancies] = useState<Tenancy[]>([]);
   const [manageTenancyOpen, setManageTenancyOpen] = useState(false);
   const [selectedTenancy, setSelectedTenancy] = useState<Tenancy | null>(null);
   const [vacateDate, setVacateDate] = useState("");
   const [deleteTenancyOpen, setDeleteTenancyOpen] = useState(false);
+
+  // DEPOSIT HANDLING STATE
+  const [depositHandlingOpen, setDepositHandlingOpen] = useState(false);
+  const [depositAction, setDepositAction] = useState<string>("refund"); 
+  const [deductionAmount, setDeductionAmount] = useState<number | string>("");
+  const [depositNotes, setDepositNotes] = useState("");
+
+  // VIEW DEPOSIT DETAILS STATE
+  const [viewDepositOpen, setViewDepositOpen] = useState(false);
+  const [depositLedger, setDepositLedger] = useState<ExtraCharge[]>([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
 
   const generatePaymentReference = (latestNumber: number = 1): string => {
     const now = new Date();
@@ -489,7 +506,7 @@ export default function PropertyManagement() {
       available_from: "",
       features: [],
       primary_image: "",
-      other_image_urls: [], // ✅ Reset 'other_image_urls'
+      other_image_urls: [], 
       notes: "",
       is_featured: false,
     });
@@ -513,7 +530,7 @@ export default function PropertyManagement() {
       available_from: room.available_from || "",
       features: room.features || [],
       primary_image: room.primary_image || "",
-      other_image_urls: room.other_image_urls || [], // ✅ Map 'other_image_urls'
+      other_image_urls: room.other_image_urls || [], 
       notes: room.notes || "",
       is_featured: !!room.is_featured,
     });
@@ -571,7 +588,6 @@ export default function PropertyManagement() {
     }
   };
 
-  // ✅ FIXED: Submit Room with 'other_image_urls'
   const submitRoomForm = async () => {
     try {
       if (!selectedProperty) return;
@@ -725,21 +741,6 @@ export default function PropertyManagement() {
     }
   };
 
-  const deleteAssignment = async (assignmentId: string) => {
-    try {
-      const { error } = await supabase
-        .from('staff_property_assignments')
-        .delete()
-        .eq('id', assignmentId);
-      if (error) throw error;
-      toast.success('Assignment removed');
-      await loadAssignments();
-    } catch (error) {
-      console.error('Error deleting assignment:', error);
-      toast.error('Failed to delete assignment');
-    }
-  };
-
   const handleAssignTenancy = async () => {
     try {
       if (!tenancyForm.lodger_id || !tenancyForm.property_id || !tenancyForm.room_id || !tenancyForm.start_date) {
@@ -747,6 +748,8 @@ export default function PropertyManagement() {
         return;
       }
        
+      setSubmitting(true);
+
       const { data: tenancy, error: tenancyErr } = await supabase
         .from('tenancies')
         .insert({
@@ -755,90 +758,109 @@ export default function PropertyManagement() {
           room_id: tenancyForm.room_id,
           start_date: tenancyForm.start_date,
           end_date: tenancyForm.end_date || null,
-          monthly_rent: tenancyForm.monthly_rent,
-          deposit_amount: tenancyForm.deposit_amount,
-          tenancy_status: 'active',
+          monthly_rent: Number(tenancyForm.monthly_rent) || 0,
+          deposit_amount: Number(tenancyForm.deposit_amount) || 0,
+          tenancy_status: 'pending',
         })
         .select('id')
         .single();
-      if (tenancyErr) throw tenancyErr;
+        
+      if (tenancyErr) throw new Error(`Tenancy Error: ${tenancyErr.message}`);
 
-      await supabase
+      const { error: roomErr } = await supabase
         .from('rooms')
-        .update({ room_status: 'occupied' })
+        .update({ room_status: 'reserved' }) 
         .eq('id', tenancyForm.room_id);
+      if (roomErr) throw new Error(`Room Update Error: ${roomErr.message}`);
 
       const today = new Date();
       const yyyy = today.getFullYear();
       const mm = String(today.getMonth() + 1).padStart(2, '0');
       const dd = String(today.getDate()).padStart(2, '0');
       const refPrefix = `PAY-${yyyy}${mm}${dd}`;
+      
       const { data: paymentsToday } = await supabase
         .from('payments')
         .select('payment_reference')
         .like('payment_reference', `${refPrefix}-%`);
+        
       let latestNumber = 1;
       if (paymentsToday && paymentsToday.length > 0) {
         const nums = paymentsToday.map((p: any) => parseInt(p.payment_reference.split('-')[2], 10)).filter(n => !isNaN(n));
         latestNumber = Math.max(1, ...nums) + 1;
       }
-      const paymentReference = generatePaymentReference(latestNumber);
 
-      await supabase.from('payments').insert({
-        lodger_id: tenancyForm.lodger_id,
-        tenancy_id: tenancy.id,
-        property_id: tenancyForm.property_id,
-        room_id: tenancyForm.room_id,
-        payment_type: 'rent',
-        amount: tenancyForm.monthly_rent,
-        payment_date: tenancyForm.start_date,
-        due_date: tenancyForm.start_date,
-        payment_status: 'pending',
-        payment_reference: paymentReference,
-      });
+      const depositVal = Number(tenancyForm.deposit_amount) || 0;
+      let depositStatus = "Skipped";
 
-      if (tenancyForm.deposit_amount > 0) {
-        const depositReference = generatePaymentReference(latestNumber + 1);
-        await supabase.from('payments').insert({
+      if (depositVal > 0) {
+        const depositReference = generatePaymentReference(latestNumber);
+        const { data: depData, error: depositErr } = await supabase.from('payments').insert({
           lodger_id: tenancyForm.lodger_id,
           tenancy_id: tenancy.id,
           property_id: tenancyForm.property_id,
           room_id: tenancyForm.room_id,
-          payment_type: 'deposit',
-          amount: tenancyForm.deposit_amount,
-          payment_date: tenancyForm.start_date,
-          due_date: tenancyForm.start_date,
+          payment_type: 'deposit', 
+          amount: depositVal,
+          due_date: today.toISOString().split('T')[0], 
           payment_status: 'pending',
           payment_reference: depositReference,
-        });
+          payment_method: 'Bank Transfer'
+        }).select(); 
+
+        if (depositErr) throw new Error(`Deposit Error: ${depositErr.message}`);
+        if (!depData || depData.length === 0) throw new Error("Deposit Insert blocked by Database Policies.");
+        
+        depositStatus = "Created";
+        latestNumber++; 
+      }
+
+      const rentVal = Number(tenancyForm.monthly_rent) || 0;
+      let rentStatus = "Skipped";
+
+      if (rentVal > 0) {
+        const rentReference = generatePaymentReference(latestNumber);
+        const { data: rentData, error: rentErr } = await supabase.from('payments').insert({
+          lodger_id: tenancyForm.lodger_id,
+          tenancy_id: tenancy.id,
+          property_id: tenancyForm.property_id,
+          room_id: tenancyForm.room_id,
+          payment_type: 'rent', 
+          amount: rentVal,
+          due_date: tenancyForm.start_date, 
+          payment_status: 'pending',
+          payment_reference: rentReference,
+          payment_method: 'Bank Transfer'
+        }).select(); 
+
+        if (rentErr) throw new Error(`Rent Error: ${rentErr.message}`);
+        if (!rentData || rentData.length === 0) throw new Error("Rent Insert blocked by Database Policies.");
+        
+        rentStatus = "Created";
       }
 
       await supabase.from('notifications').insert({
         recipient_id: tenancyForm.lodger_id,
         notification_type: 'in_app',
-        priority: 'medium',
-        subject: 'New Tenancy Assigned',
-        message_body: 'You have been assigned a room. Please check your dashboard for details.',
+        priority: 'high', 
+        subject: 'Action Required: Pay Security Deposit',
+        message_body: 'You have been assigned a room. Please log in and pay your Security Deposit to officially activate your tenancy.',
         related_entity_type: 'tenancy',
         related_entity_id: tenancy.id,
       });
 
-      toast.success('Tenancy assigned and payments created.');
+      toast.success(`Tenancy pending. Deposit: ${depositStatus}, Rent: ${rentStatus}`);
       setTenancyDialogOpen(false);
       setTenancyForm({
-        lodger_id: '',
-        property_id: '',
-        room_id: '',
-        monthly_rent: 0,
-        deposit_amount: 0,
-        start_date: '',
-        end_date: '',
+        lodger_id: '', property_id: '', room_id: '', monthly_rent: 0, deposit_amount: 0, start_date: '', end_date: '',
       });
       loadProperties();
       loadTenancies(); 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error assigning tenancy:', error);
-      toast.error('Failed to assign tenancy');
+      toast.error(error.message || 'Failed to assign tenancy');
+    } finally {
+        setSubmitting(false);
     }
   };
 
@@ -889,7 +911,6 @@ export default function PropertyManagement() {
     }
   };
 
-  // ✅ FIXED: Updates 'other_image_urls'
   const uploadRoomGalleryImages = async (files: File[]) => {
     if (!files.length) return;
     try {
@@ -913,7 +934,6 @@ export default function PropertyManagement() {
     }
   };
 
-  // ✅ FIXED: Removes from 'other_image_urls'
   const removeRoomGalleryImage = (url: string) => {
     setRoomForm(prev => ({ ...prev, other_image_urls: (prev.other_image_urls || []).filter(u => u !== url) }));
   };
@@ -954,18 +974,107 @@ export default function PropertyManagement() {
     finally { setSubmitting(false); }
   };
 
-  const handleVacateRoom = async () => {
+  // ✅ PHASE 4: INTERCEPT VACATE BUTTON TO OPEN DEPOSIT HANDLING
+  const handleVacateClick = () => {
+    if (!vacateDate) return toast.error("Please select a move-out date.");
+    setManageTenancyOpen(false);
+    setDepositAction("refund");
+    setDeductionAmount("");
+    setDepositNotes("");
+    setDepositHandlingOpen(true);
+  };
+
+  // ✅ PHASE 4 & EXTRA CHARGES FIX: FINALIZE MOVE OUT & PROCESS DEPOSIT
+  const submitMoveOut = async () => {
     if (!selectedTenancy) return;
     setSubmitting(true);
     try {
-        await supabase.from('tenancies').update({ tenancy_status: 'ended', end_date: vacateDate }).eq('id', selectedTenancy.id);
+        let finalDepositStatus = selectedTenancy.deposit_status || 'held';
+
+        // Only process if they actually paid a deposit
+        if (selectedTenancy.deposit_amount > 0 && finalDepositStatus !== 'unpaid') {
+            if (depositAction === 'refund') finalDepositStatus = 'refunded';
+            if (depositAction === 'retain') finalDepositStatus = 'retained';
+            
+            if (depositAction === 'partial' || depositAction === 'retain') {
+                finalDepositStatus = depositAction === 'partial' ? 'partially_deducted' : 'retained';
+                const amtToDeduct = depositAction === 'retain' ? selectedTenancy.deposit_amount : Number(deductionAmount);
+                const note = depositNotes || (depositAction === 'retain' ? 'Full Deposit Retained' : 'Partial Deduction');
+
+                // ✅ FIXED: Ledger entry matches extra_charges schema EXACTLY
+                const { data: ecData, error: ecError } = await supabase.from('extra_charges').insert({
+                    lodger_id: selectedTenancy.lodger_id,
+                    tenancy_id: selectedTenancy.id,
+                    property_id: selectedTenancy.property_id,
+                    amount: amtToDeduct,
+                    reason: note, // Changed from reason to description to match schema
+                    charge_type: 'deposit_deduction', // Added required type
+                    due_date: new Date().toISOString().split('T')[0],
+                    charge_status: 'paid' 
+                }).select();
+
+                if (ecError) throw new Error("Ledger Error: " + ecError.message);
+                if (!ecData || ecData.length === 0) throw new Error("Failed to write to extra_charges (RLS Blocked).");
+            }
+        }
+
+        // 1. End Tenancy & Update Deposit Status
+        const { error: tenErr } = await supabase.from('tenancies').update({ 
+            tenancy_status: 'ended', 
+            end_date: vacateDate,
+            deposit_status: finalDepositStatus
+        }).eq('id', selectedTenancy.id);
+        if (tenErr) throw new Error("Tenancy Update Error: " + tenErr.message);
+
+        // 2. Free up the room
         await supabase.from('rooms').update({ room_status: 'available' }).eq('id', selectedTenancy.room_id);
-        toast.success("Room vacated");
-        setManageTenancyOpen(false);
+
+        // 3. Notify Lodger
+        await supabase.from('notifications').insert({
+            recipient_id: selectedTenancy.lodger_id,
+            notification_type: 'in_app',
+            priority: 'high',
+            subject: 'Tenancy Ended & Deposit Processed',
+            message_body: `Your tenancy has officially ended. Your security deposit has been marked as: ${finalDepositStatus.replace('_', ' ')}. Please contact administration if you have questions.`,
+            related_entity_type: 'tenancy',
+            related_entity_id: selectedTenancy.id,
+        });
+
+        toast.success("Room vacated and deposit processed successfully.");
+        setDepositHandlingOpen(false);
         loadTenancies();
         loadProperties();
-    } catch(e) { toast.error("Vacate failed"); }
-    finally { setSubmitting(false); }
+    } catch(e: any) { 
+        console.error(e);
+        toast.error("Failed to process move out: " + e.message); 
+    } finally { 
+        setSubmitting(false); 
+    }
+  };
+
+  // ✅ NEW: View Deposit Ledger Details
+  const handleViewDeposit = async (t: Tenancy) => {
+      setSelectedTenancy(t);
+      setViewDepositOpen(true);
+      setLedgerLoading(true);
+
+      try {
+          // Fetch any extra_charges logged as deductions against this tenancy
+          const { data, error } = await supabase
+            .from('extra_charges')
+            .select('*')
+            .eq('tenancy_id', t.id)
+            .eq('charge_type', 'deposit_deduction') // Filter strictly by the deductions we just created
+            .order('created_at', { ascending: false });
+            
+          if (error) throw error;
+          setDepositLedger(data || []);
+      } catch (err) {
+          console.error("Failed to fetch ledger", err);
+          toast.error("Could not load deposit deduction history.");
+      } finally {
+          setLedgerLoading(false);
+      }
   };
 
   const handleDeleteTenancyConfirm = async () => {
@@ -1124,7 +1233,7 @@ export default function PropertyManagement() {
       <Card>
         <CardHeader>
             <CardTitle>Tenancy Records</CardTitle>
-            <CardDescription>Manage active leases and move-outs</CardDescription>
+            <CardDescription>Manage active leases, move-outs, and deposits</CardDescription>
         </CardHeader>
         <CardContent>
             <div className="rounded-md border">
@@ -1135,7 +1244,7 @@ export default function PropertyManagement() {
                             <TableHead>Property</TableHead>
                             <TableHead>Room</TableHead>
                             <TableHead>Start Date</TableHead>
-                            <TableHead>End Date</TableHead>
+                            <TableHead>Deposit</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -1149,9 +1258,23 @@ export default function PropertyManagement() {
                                 <TableCell>{t.property?.property_name}</TableCell>
                                 <TableCell>{t.room?.room_number}</TableCell>
                                 <TableCell>{format(parseISO(t.start_date), 'dd MMM yyyy')}</TableCell>
-                                <TableCell>{t.end_date ? format(parseISO(t.end_date), 'dd MMM yyyy') : <span className="text-muted-foreground italic">Ongoing</span>}</TableCell>
-                                <TableCell><Badge variant={t.tenancy_status === 'active' ? 'default' : t.tenancy_status === 'ended' ? 'secondary' : 'destructive'}>{t.tenancy_status}</Badge></TableCell>
+                                <TableCell>
+                                    <div className="flex flex-col">
+                                        <span className="font-medium">£{t.deposit_amount}</span>
+                                        <span className="text-[10px] uppercase text-muted-foreground">{t.deposit_status?.replace('_', ' ') || 'Unpaid'}</span>
+                                    </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge 
+                                    variant={t.tenancy_status === 'active' ? 'default' : t.tenancy_status === 'pending' ? 'outline' : t.tenancy_status === 'ended' ? 'secondary' : 'destructive'}
+                                    className={t.tenancy_status === 'pending' ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border-none' : ''}
+                                  >
+                                    {t.tenancy_status}
+                                  </Badge>
+                                </TableCell>
                                 <TableCell className="text-right space-x-2">
+                                    {/* ✅ NEW: View Deposit Ledger Button */}
+                                    <Button size="sm" variant="ghost" onClick={() => handleViewDeposit(t)}><Eye className="w-4 h-4 mr-1"/> Deposit</Button>
                                     <Button size="sm" variant="outline" onClick={() => handleManageTenancy(t)}>Manage</Button>
                                     <Button size="sm" variant="ghost" className="text-red-500" onClick={() => { setSelectedTenancy(t); setDeleteTenancyOpen(true); }}><Trash2 className="w-4 h-4" /></Button>
                                 </TableCell>
@@ -1162,6 +1285,72 @@ export default function PropertyManagement() {
             </div>
         </CardContent>
       </Card>
+
+      {/* ✅ NEW: VIEW DEPOSIT LEDGER MODAL */}
+      <Dialog open={viewDepositOpen} onOpenChange={setViewDepositOpen}>
+          <DialogContent className="max-w-md">
+              <DialogHeader>
+                  <DialogTitle>Deposit Ledger</DialogTitle>
+                  <DialogDescription>Financial breakdown of the security deposit for {selectedTenancy?.lodger?.full_name}.</DialogDescription>
+              </DialogHeader>
+
+              <div className="py-4 space-y-4">
+                  {/* Summary Header */}
+                  <div className="flex items-center justify-between p-4 bg-muted rounded-lg border">
+                      <div>
+                          <p className="text-sm font-medium text-muted-foreground">Original Deposit</p>
+                          <p className="text-2xl font-bold">£{selectedTenancy?.deposit_amount || 0}</p>
+                      </div>
+                      <div className="text-right">
+                          <p className="text-sm font-medium text-muted-foreground">Current Status</p>
+                          <Badge variant={
+                              selectedTenancy?.deposit_status === 'refunded' ? 'default' : 
+                              selectedTenancy?.deposit_status === 'retained' ? 'destructive' : 
+                              selectedTenancy?.deposit_status === 'partially_deducted' ? 'secondary' : 'outline'
+                          } className="uppercase text-xs mt-1">
+                              {selectedTenancy?.deposit_status?.replace('_', ' ') || 'Unpaid'}
+                          </Badge>
+                      </div>
+                  </div>
+
+                  {/* Deduction Ledger */}
+                  {ledgerLoading ? (
+                      <div className="flex justify-center py-4"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground"/></div>
+                  ) : depositLedger.length > 0 ? (
+                      <div className="space-y-2">
+                          <h4 className="text-sm font-semibold flex items-center gap-2"><Receipt className="h-4 w-4"/> Deductions & Retentions</h4>
+                          <div className="border rounded-md divide-y">
+                              {depositLedger.map((charge) => (
+                                  <div key={charge.id} className="p-3 text-sm flex justify-between items-center bg-red-50/30">
+                                      <div>
+                                          <p className="font-medium text-red-800">{charge.reason || 'Deduction'}</p>
+                                          <p className="text-xs text-muted-foreground">{format(parseISO(charge.created_at), 'dd MMM yyyy')}</p>
+                                      </div>
+                                      <p className="font-bold text-red-600">-£{charge.amount}</p>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  ) : (
+                      <p className="text-sm text-center text-muted-foreground py-2">No deductions recorded against this deposit.</p>
+                  )}
+
+                  {/* Final Calculation */}
+                  {selectedTenancy?.deposit_status && ['refunded', 'partially_deducted', 'retained'].includes(selectedTenancy.deposit_status) && (
+                      <div className="pt-4 border-t flex justify-between items-center text-lg font-bold">
+                          <span>Total Refunded:</span>
+                          <span className={selectedTenancy.deposit_status === 'retained' ? 'text-red-500' : 'text-green-600'}>
+                              £{Math.max(0, (selectedTenancy?.deposit_amount || 0) - depositLedger.reduce((sum, charge) => sum + Number(charge.amount), 0))}
+                          </span>
+                      </div>
+                  )}
+              </div>
+
+              <DialogFooter>
+                  <Button variant="outline" onClick={() => setViewDepositOpen(false)}>Close</Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
 
       {/* MANAGE TENANCY DIALOG */}
       <Dialog open={manageTenancyOpen} onOpenChange={setManageTenancyOpen}>
@@ -1178,16 +1367,16 @@ export default function PropertyManagement() {
                 {selectedTenancy?.tenancy_status === 'active' && (
                     <div className="space-y-2 border-t pt-4">
                         <Label className="text-red-600 font-semibold flex items-center gap-2"><LogOut className="w-4 h-4"/> Vacate Room</Label>
-                        <p className="text-xs text-muted-foreground">Ends tenancy and marks room as Available.</p>
+                        <p className="text-xs text-muted-foreground">Ends tenancy and opens the deposit handling workflow.</p>
                         <div className="flex gap-2 items-end">
                             <div className="flex-1"><Label>Move Out Date</Label><Input type="date" value={vacateDate} onChange={e => setVacateDate(e.target.value)} /></div>
-                            <Button variant="destructive" onClick={handleVacateRoom} disabled={submitting}>Confirm Vacate</Button>
+                            <Button variant="destructive" onClick={handleVacateClick} disabled={submitting}>Confirm Vacate</Button>
                         </div>
                     </div>
                 )}
 
                 <div className="space-y-2 border-t pt-4">
-                    <Label>Manual Status</Label>
+                    <Label>Manual Status Override</Label>
                     <div className="flex gap-2">
                         <Button size="sm" variant="outline" disabled={selectedTenancy?.tenancy_status === 'active'} onClick={() => handleUpdateTenancyStatus('active')}>Set Active</Button>
                         <Button size="sm" variant="outline" disabled={selectedTenancy?.tenancy_status === 'pending'} onClick={() => handleUpdateTenancyStatus('pending')}>Set Pending</Button>
@@ -1196,6 +1385,81 @@ export default function PropertyManagement() {
                 </div>
             </div>
             <DialogFooter><Button variant="ghost" onClick={() => setManageTenancyOpen(false)}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ DEPOSIT HANDLING DIALOG */}
+      <Dialog open={depositHandlingOpen} onOpenChange={setDepositHandlingOpen}>
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Process Move-Out & Deposit</DialogTitle>
+                <DialogDescription>Review the security deposit before officially closing the tenancy.</DialogDescription>
+            </DialogHeader>
+            <div className="py-4 space-y-4">
+                <div className="bg-primary/5 border border-primary/20 p-4 rounded-lg flex items-center justify-between">
+                    <div>
+                        <p className="text-sm text-muted-foreground">Held Deposit</p>
+                        <p className="text-2xl font-bold">£{selectedTenancy?.deposit_amount || 0}</p>
+                    </div>
+                    {(!selectedTenancy?.deposit_amount || selectedTenancy.deposit_amount === 0) && (
+                        <AlertCircle className="h-6 w-6 text-yellow-600" />
+                    )}
+                </div>
+
+                {selectedTenancy?.deposit_amount > 0 ? (
+                    <>
+                        <div className="space-y-3 pt-2">
+                            <Label>Action to take on Deposit</Label>
+                            <Select value={depositAction} onValueChange={setDepositAction}>
+                                <SelectTrigger><SelectValue/></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="refund">Refund in Full</SelectItem>
+                                    <SelectItem value="partial">Partially Deduct (Damages/Arrears)</SelectItem>
+                                    <SelectItem value="retain">Retain Completely</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {depositAction === 'partial' && (
+                            <div className="space-y-3 border-l-2 border-primary pl-4 ml-2">
+                                <div>
+                                    <Label>Amount to Deduct (£)</Label>
+                                    <Input 
+                                        type="number" 
+                                        max={selectedTenancy.deposit_amount} 
+                                        value={deductionAmount} 
+                                        onChange={e => setDeductionAmount(e.target.value)} 
+                                        placeholder="e.g. 150" 
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Remaining £{selectedTenancy.deposit_amount - (Number(deductionAmount) || 0)} will be marked as refunded.
+                                    </p>
+                                </div>
+                                <div>
+                                    <Label>Reason for Deduction</Label>
+                                    <Input value={depositNotes} onChange={e => setDepositNotes(e.target.value)} placeholder="e.g. Broken window blind" />
+                                </div>
+                            </div>
+                        )}
+
+                        {depositAction === 'retain' && (
+                            <div>
+                                <Label>Reason for Retaining</Label>
+                                <Textarea value={depositNotes} onChange={e => setDepositNotes(e.target.value)} placeholder="Provide specific reasons..." />
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <p className="text-sm text-muted-foreground italic text-center py-4">No deposit was collected for this tenancy. Proceeding will simply end the tenancy and free the room.</p>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setDepositHandlingOpen(false)} disabled={submitting}>Cancel</Button>
+                <Button onClick={submitMoveOut} disabled={submitting}>
+                    {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin"/>}
+                    Finalize Move-Out
+                </Button>
+            </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1373,7 +1637,6 @@ export default function PropertyManagement() {
                         <Badge variant={r.room_status === 'available' ? 'default' : r.room_status === 'occupied' ? 'secondary' : 'outline'}>{r.room_status}</Badge>
                       </TableCell>
                       <TableCell>{(r as Room & { tenantName?: string }).tenantName || <span className="text-muted-foreground">Vacant</span>}</TableCell>
-                      {/* ✅ FIXED: Count 'other_image_urls' */}
                       <TableCell>{(r.other_image_urls || []).length}</TableCell>
                       <TableCell className="text-right space-x-2">
                         <Button size="sm" variant="outline" onClick={() => handleEditRoom(r)}><Pencil className="w-4 h-4" /></Button>
@@ -1569,7 +1832,7 @@ export default function PropertyManagement() {
                 </div>
             </div>
 
-            {/* ✅ FIXED: Preview maps 'other_image_urls' */}
+            {/* Gallery Preview */}
             {(roomForm.other_image_urls || []).length > 0 && (
                 <div className="flex flex-wrap gap-2">
                     {(roomForm.other_image_urls || []).map((url) => (

@@ -170,8 +170,8 @@ const PaymentsBilling = () => {
         "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
         `This deposit is associated with the lodging agreement dated ${receiptDate} between the parties.`,
         "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
-        "Note: The above amount has been received and will be held securely by Domus Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
-        "This receipt was automatically generated and issued by Domus Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
+        "Note: The above amount has been received and will be held securely by Domūs Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
+        "This receipt was automatically generated and issued by Domūs Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
         "By proceeding with the agreement on the lodging agreement, the lodger acknowledges and agrees to the terms associated with this deposit."
     ];
 
@@ -207,7 +207,7 @@ const PaymentsBilling = () => {
     doc.text("If you have any questions or concerns, contact:", margin, yPos);
     yPos += 6;
     doc.setFont("times", "bold");
-    doc.text("Domus Manutentio et Servitia Ltd", margin, yPos);
+    doc.text("Domūs Manutentio et Servitia Ltd", margin, yPos);
     yPos += 5;
     doc.setFont("times", "normal");
     doc.text("Registration No: 16395957", margin, yPos);
