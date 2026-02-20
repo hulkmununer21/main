@@ -71,7 +71,7 @@ const PaymentsBilling = () => {
     } catch (err) { console.error(err); toast.error("Failed to load payments."); } finally { setLoading(false); }
   };
 
-  // ✅ FIXED: Robust Receipt Generation (Admin)
+  // ✅ FIXED: Two-Branch Receipt Generation for Admin
   const generateReceipt = (payment: Payment) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -79,144 +79,220 @@ const PaymentsBilling = () => {
     const margin = 20;
     const maxLineWidth = pageWidth - (margin * 2);
     
+    const isDeposit = payment.payment_type?.toLowerCase() === 'deposit';
+    const receiptDate = payment.payment_date ? format(parseISO(payment.payment_date), 'dd MMM yyyy') : format(new Date(), 'dd MMM yyyy');
+    const receiptNo = payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`;
+    const lodgerName = payment.lodger_profiles?.full_name || "Lodger";
+    const propertyAddress = payment.properties?.property_name || "Address on File";
+    const roomNumber = payment.rooms?.room_number || "N/A";
+    
     let yPos = 20;
 
-    // 1. Logo
-    try { 
-        doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, yPos, 30, 30); 
-        yPos += 35;
-    } catch (e) {
+    // ==========================================
+    // BRANCH 1: DEPOSIT RECEIPT (Strict Legal Format)
+    // ==========================================
+    if (isDeposit) {
+        try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 12, yPos, 24, 24); yPos += 30; } catch (e) { yPos += 10; }
+
+        doc.setFont("times", "bold");
+        doc.setFontSize(14); 
+        doc.text("DEPOSIT RECEIPT", pageWidth / 2, yPos, { align: "center" });
         yPos += 10;
-    }
 
-    doc.setFont("times", "bold");
-    doc.setFontSize(16);
-    doc.text("DEPOSIT RECEIPT", pageWidth / 2, yPos, { align: "center" });
-    yPos += 15;
+        doc.setFont("times", "normal");
+        doc.setFontSize(12); 
+        const lineHeight = 6; 
 
-    // 2. Metadata
-    doc.setFontSize(11);
-    doc.setFont("times", "normal");
-    const lineHeight = 7;
+        doc.text(`Receipt No: ${receiptNo}`, margin, yPos);
+        yPos += lineHeight;
+        doc.text(`Date: ${receiptDate}`, margin, yPos);
+        yPos += lineHeight;
+        doc.text(`Received From: ${lodgerName}`, margin, yPos);
+        yPos += lineHeight;
+        doc.text(`Street Address: ${propertyAddress}`, margin, yPos); 
+        yPos += lineHeight;
+        doc.text(`Details: Room ${roomNumber}`, margin, yPos);
+        yPos += 10; 
 
-    const receiptDate = payment.payment_date ? format(parseISO(payment.payment_date), 'd/MM/yyyy') : format(new Date(), 'd/MM/yyyy');
+        doc.setFont("times", "bold");
+        doc.text("Deposit Value", margin, yPos);
+        yPos += lineHeight;
+        doc.setFont("times", "normal");
+        doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, margin, yPos);
+        yPos += lineHeight;
+        
+        const method = payment.payment_method?.toLowerCase() || "";
+        let checkX = margin;
+        
+        doc.rect(checkX, yPos - 4, 4, 4); 
+        if (method.includes('check') || method.includes('cheque')) doc.text("x", checkX + 1, yPos - 1);
+        doc.text("Check", checkX + 6, yPos);
+        
+        checkX += 40;
+        doc.rect(checkX, yPos - 4, 4, 4);
+        if (method.includes('cash')) doc.text("x", checkX + 1, yPos - 1);
+        doc.text("Cash Deposit", checkX + 6, yPos);
 
-    doc.text(`Receipt No: ${payment.payment_reference || `DOM/LDG/${new Date().getFullYear()}/${payment.id.substring(0,4)}`}`, margin, yPos);
-    yPos += lineHeight;
-    doc.text(`Date: ${receiptDate}`, margin, yPos);
-    yPos += lineHeight;
+        checkX += 50;
+        doc.rect(checkX, yPos - 4, 4, 4);
+        if (!method.includes('check') && !method.includes('cash')) doc.text("x", checkX + 1, yPos - 1);
+        doc.text(`Other: ${!method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "________________"}`, checkX + 6, yPos);
+        yPos += 10;
 
-    const nameText = `Received From: ${payment.lodger_profiles?.full_name || "Lodger"}`;
-    doc.text(doc.splitTextToSize(nameText, maxLineWidth), margin, yPos);
-    yPos += lineHeight * (doc.splitTextToSize(nameText, maxLineWidth).length);
+        doc.setFont("times", "bold");
+        doc.text("Deposit Type", margin, yPos);
+        yPos += lineHeight;
+        doc.setFont("times", "normal");
+        doc.text("Deposit is for: Security & Damage", margin, yPos);
+        yPos += lineHeight;
+        doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, margin, yPos);
+        yPos += 10;
 
-    const addressText = `Street Address: ${payment.properties?.property_name || "Address on File"}`;
-    doc.text(doc.splitTextToSize(addressText, maxLineWidth), margin, yPos);
-    yPos += lineHeight * (doc.splitTextToSize(addressText, maxLineWidth).length);
+        const legalText = [
+            "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
+            `This deposit is associated with the lodging agreement dated ${receiptDate} between the parties.`,
+            "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
+            "Note: The above amount has been received and will be held securely by Domus Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
+            "This receipt was automatically generated and issued by Domus Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
+            "By proceeding with the agreement on the lodging agreement, the lodger acknowledges and agrees to the terms associated with this deposit."
+        ];
 
-    doc.text(`City, State, Zip: Wolverhampton (Ref Room ${payment.rooms?.room_number || "N/A"})`, margin, yPos);
-    yPos += 12;
+        legalText.forEach(text => {
+            if (yPos > pageHeight - 40) { doc.addPage(); yPos = 20; }
+            doc.text(text, margin, yPos, { maxWidth: maxLineWidth, align: "justify" });
+            const dim = doc.getTextDimensions(text, { maxWidth: maxLineWidth });
+            yPos += dim.h + 3; 
+        });
 
-    // 3. Value
-    doc.setFont("times", "bold");
-    doc.text("Deposit Value", margin, yPos);
-    yPos += lineHeight;
-    doc.setFont("times", "normal");
-    doc.text(`This receipt is for the deposit of £${Number(payment.amount).toFixed(2)} Great British Pounds in the form of`, margin, yPos);
-    yPos += lineHeight;
-    
-    // 4. Method (Dynamic positioning)
-    const method = payment.payment_method?.toLowerCase() || "";
-    let currentX = margin;
+        if (yPos > pageHeight - 45) { doc.addPage(); yPos = 20; } else { yPos += 5; }
 
-    // Checkbox 1
-    doc.rect(currentX, yPos - 4, 4, 4); 
-    if (method.includes('check') || method.includes('cheque')) doc.text("x", currentX + 1, yPos - 1);
-    doc.text("Check", currentX + 6, yPos);
-    currentX += doc.getTextWidth("Check") + 20; 
+        doc.setDrawColor(200);
+        doc.line(margin, yPos, pageWidth - margin, yPos);
+        yPos += 8;
 
-    // Checkbox 2
-    doc.rect(currentX, yPos - 4, 4, 4);
-    if (method.includes('cash')) doc.text("x", currentX + 1, yPos - 1);
-    doc.text("Cash Deposit", currentX + 6, yPos);
-    currentX += doc.getTextWidth("Cash Deposit") + 20;
+        doc.setFont("times", "bold");
+        doc.text("Contact Us", margin, yPos);
+        yPos += lineHeight;
+        doc.setFont("times", "normal");
+        doc.text("If you have any questions or concerns, contact:", margin, yPos);
+        yPos += lineHeight;
+        doc.setFont("times", "bold");
+        doc.text("Domus Manutentio et Servitia Ltd", margin, yPos);
+        yPos += lineHeight;
+        doc.setFont("times", "normal");
+        doc.text("Registration No: 16395957", margin, yPos);
+        yPos += lineHeight;
+        doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", margin, yPos);
+        yPos += lineHeight;
+        doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", margin, yPos);
 
-    // Checkbox 3
-    doc.rect(currentX, yPos - 4, 4, 4);
-    if (!method.includes('check') && !method.includes('cash')) doc.text("x", currentX + 1, yPos - 1);
-    const otherTextPrefix = "Other: ";
-    doc.text(otherTextPrefix, currentX + 6, yPos);
-    const otherValue = !method.includes('check') && !method.includes('cash') ? (payment.payment_method || "Transfer") : "________________";
-    
-    // Ensure "Other" value wraps if needed
-    const availableWidth = pageWidth - (currentX + 6 + doc.getTextWidth(otherTextPrefix)) - margin;
-    const splitOther = doc.splitTextToSize(otherValue, availableWidth);
-    doc.text(splitOther, currentX + 6 + doc.getTextWidth(otherTextPrefix), yPos);
-    yPos += 12;
+    } 
+    // ==========================================
+    // BRANCH 2: GENERAL INVOICE (Rent, Utilities, Extra Charges)
+    // ==========================================
+    else {
+        try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, yPos, 30, 30); yPos += 35; } catch (e) { yPos += 10; }
 
-    // 5. Type
-    doc.setFont("times", "bold");
-    doc.text("Deposit Type", margin, yPos);
-    yPos += lineHeight;
-    doc.setFont("times", "normal");
-    const isRent = payment.payment_type?.toLowerCase() === 'rent';
-    doc.text(isRent ? `Payment is for: Rent` : "Deposit is for: Security & Damage", margin, yPos);
-    yPos += lineHeight;
-    doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, margin, yPos);
-    yPos += 12;
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(18);
+        doc.text("PAYMENT RECEIPT", pageWidth / 2, yPos, { align: "center" });
+        yPos += 8;
+        
+        doc.setFontSize(12);
+        doc.text("Domus Manutentio et Servitia Ltd", pageWidth / 2, yPos, { align: "center" });
+        yPos += 20;
 
-    // 6. Legal Text
-    const legalText = [
-        "This deposit is held in relation to a lodger license agreement and is not subject to the Housing Act 2004 tenancy deposit regulations.",
-        `This deposit is associated with the lodging agreement dated ${receiptDate} between the parties.`,
-        "This deposit will be refunded at the end of the lodging term, subject to no breach of the agreement or damage to the premises, as detailed in the Lodging Agreement.",
-        "Note: The above amount has been received and will be held securely by Domūs Manutentio et Servitia Ltd for the duration of the lodger’s stay, subject to the conditions outlined in the Lodging Agreement.",
-        "This receipt was automatically generated and issued by Domūs Manutentio et Servitia Ltd as confirmation of funds received on the date stated above.",
-        "By proceeding with the agreement on the lodging agreement, the lodger acknowledges and agrees to the terms associated with this deposit."
-    ];
+        // Metadata Layout
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.text("Receipt #:", margin, yPos);
+        doc.setFont("helvetica", "normal");
+        doc.text(receiptNo, margin + 25, yPos);
+        
+        doc.setFont("helvetica", "bold");
+        doc.text("Date:", pageWidth - 70, yPos);
+        doc.setFont("helvetica", "normal");
+        doc.text(receiptDate, pageWidth - 40, yPos);
+        yPos += 8;
 
-    doc.setFontSize(10);
-    const legalLineHeight = 5;
+        doc.setFont("helvetica", "bold");
+        doc.text("Received From:", margin, yPos);
+        doc.setFont("helvetica", "normal");
+        doc.text(lodgerName, margin + 30, yPos);
+        yPos += 8;
 
-    legalText.forEach(text => {
-        if (yPos > pageHeight - 50) { 
-            doc.addPage();
-            yPos = 20; 
+        doc.setFont("helvetica", "bold");
+        doc.text("Property:", margin, yPos);
+        doc.setFont("helvetica", "normal");
+        const fullAddress = `${propertyAddress}\nRoom ${roomNumber}`;
+        doc.text(fullAddress, margin + 20, yPos);
+        yPos += 15;
+
+        // Table Header
+        doc.setFillColor(245, 245, 245);
+        doc.rect(margin, yPos, maxLineWidth, 10, "F");
+        doc.setFont("helvetica", "bold");
+        doc.text("Description", margin + 5, yPos + 7);
+        doc.text("Amount", pageWidth - margin - 30, yPos + 7);
+        yPos += 10;
+
+        // Table Row Data
+        doc.setFont("helvetica", "normal");
+        
+        let descriptionLabel = "Payment";
+        if (payment.payment_type === 'rent') {
+            const dateToUse = payment.due_date ? parseISO(payment.due_date) : new Date();
+            descriptionLabel = `Lodging Fee / Rent - ${format(dateToUse, 'MMMM yyyy')}`;
         }
-        const splitText = doc.splitTextToSize(text, maxLineWidth);
-        doc.text(splitText, margin, yPos);
-        yPos += (splitText.length * legalLineHeight) + 3;
-    });
+        else if (payment.payment_type === 'extra_charge') descriptionLabel = "Extra Charge / Penalty";
+        else if (payment.payment_type === 'utility') descriptionLabel = "Utility Bill Contribution";
+        else if (payment.payment_type) descriptionLabel = payment.payment_type.replace('_', ' ').toUpperCase();
 
-    // 7. Footer
-    if (yPos > pageHeight - 45) {
-        doc.addPage();
-        yPos = 20;
-    } else {
+        doc.text(descriptionLabel, margin + 5, yPos + 8);
+        doc.text(`£${Number(payment.amount).toFixed(2)}`, pageWidth - margin - 30, yPos + 8);
+        yPos += 20;
+
+        // Line Separator
+        doc.setDrawColor(200, 200, 200);
+        doc.line(margin, yPos, pageWidth - margin, yPos);
+        yPos += 10;
+
+        // Totals & Paid Stamp
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(12);
+        doc.text("TOTAL", pageWidth - margin - 50, yPos);
+        doc.text(`£${Number(payment.amount).toFixed(2)}`, pageWidth - margin - 30, yPos);
+        
+        yPos += 15;
+        if (['paid', 'completed'].includes(payment.payment_status?.toLowerCase())) {
+            doc.setTextColor(0, 150, 0); 
+            doc.setFontSize(16);
+            doc.text("PAID IN FULL", pageWidth - margin - 60, yPos);
+            doc.setTextColor(0, 0, 0); 
+        }
+
+        yPos += 40;
+
+        // New Footer Format
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text("Contact Us", margin, yPos);
+        yPos += 6;
+        doc.setFont("helvetica", "normal");
+        doc.text("If you have any questions or concerns, contact:", margin, yPos);
+        yPos += 6;
+        doc.setFont("helvetica", "bold");
+        doc.text("Domus Manutentio et Servitia Ltd", margin, yPos);
+        doc.setFont("helvetica", "normal");
         yPos += 5;
+        doc.text("Registration No: 16395957", margin, yPos);
+        yPos += 5;
+        doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", margin, yPos);
+        yPos += 5;
+        doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", margin, yPos);
     }
 
-    doc.setDrawColor(200);
-    doc.line(margin, yPos, pageWidth - margin, yPos);
-    yPos += 8;
-
-    doc.setFont("times", "bold");
-    doc.text("Contact Us", margin, yPos);
-    yPos += 6;
-    doc.setFont("times", "normal");
-    doc.text("If you have any questions or concerns, contact:", margin, yPos);
-    yPos += 6;
-    doc.setFont("times", "bold");
-    doc.text("Domūs Manutentio et Servitia Ltd", margin, yPos);
-    yPos += 5;
-    doc.setFont("times", "normal");
-    doc.text("Registration No: 16395957", margin, yPos);
-    yPos += 5;
-    doc.text("Address: Liana Gardens, Wolverhampton WV2 2AD", margin, yPos);
-    yPos += 5;
-    doc.text("Phone: 01902 214066   Email: info@domusservitia.uk", margin, yPos);
-
-    doc.save(`Receipt_${payment.payment_reference || payment.id}.pdf`);
+    doc.save(`Receipt_${receiptNo}.pdf`);
   };
 
   const handleOpenModify = (payment: Payment) => {
@@ -304,6 +380,7 @@ const PaymentsBilling = () => {
                       </div>
                     </div>
                     <div className="flex gap-2 items-center">
+                        {/* Download button uses the new split generateReceipt logic */}
                         {payment.payment_status === 'completed' && <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => generateReceipt(payment)}><Download className="w-4 h-4 mr-2"/> Receipt</Button>}
                         <Button size="sm" variant="outline" onClick={() => handleOpenModify(payment)}><Pencil className="w-4 h-4 mr-2"/> Modify</Button>
                     </div>
