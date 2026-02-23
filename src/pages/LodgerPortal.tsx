@@ -102,7 +102,7 @@ const LodgerPortal = () => {
     // BRANCH 1: DEPOSIT RECEIPT (Strict Legal Format)
     // ==========================================
     if (isDeposit) {
-      try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 12, yPos, 24, 24); yPos += 30; } catch (e) { yPos += 10; }
+      try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 18, yPos, 36, 36); yPos += 40; } catch (e) { yPos += 10; }
 
       doc.setFont("times", "bold");
       doc.setFontSize(14); 
@@ -155,7 +155,20 @@ const LodgerPortal = () => {
       doc.setFont("times", "normal");
       doc.text("Deposit is for: Security & Damage", margin, yPos);
       yPos += lineHeight;
-      doc.text(`This deposit is  x Refundable  _ Non-Refundable (Condition applied)`, margin, yPos);
+      
+      // Refundable checkbox section
+      doc.text("This deposit is", margin, yPos);
+      let refundCheckX = margin + 32;
+      
+      // Refundable checkbox (checked by default)
+      doc.rect(refundCheckX, yPos - 4, 4, 4);
+      doc.text("x", refundCheckX + 1, yPos - 1);
+      doc.text("Refundable", refundCheckX + 6, yPos);
+      
+      // Non-Refundable checkbox (unchecked)
+      refundCheckX += 35;
+      doc.rect(refundCheckX, yPos - 4, 4, 4);
+      doc.text("Non-Refundable (Condition applied)", refundCheckX + 6, yPos);
       yPos += 10;
 
       const legalText = [
@@ -201,7 +214,7 @@ const LodgerPortal = () => {
     // BRANCH 2: GENERAL INVOICE (Rent, Utilities, Extra Charges)
     // ==========================================
     else {
-      try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 15, yPos, 30, 30); yPos += 35; } catch (e) { yPos += 10; }
+      try { doc.addImage(logo, 'PNG', (pageWidth / 2) - 20, yPos, 40, 40); yPos += 45; } catch (e) { yPos += 10; }
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(18);
