@@ -43,6 +43,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+
 import AdminOverview from "./admin/AdminOverview";
 import BinManagement from "./admin/BinManagement";
 import InspectionManagement from "./admin/InspectionManagement";
@@ -55,6 +56,7 @@ import ComplaintManagement from "./admin/ComplaintManagement";
 import DocumentManagement from "./admin/DocumentManagement";
 import PropertyManagement from "./admin/PropertyManagement";
 import UserManagement from "./admin/UserManagement";
+import LodgingRequests from "./admin/LodgingRequests"; // ✅ NEW: Imported LodgingRequests
 
 const AdminPortal = () => {
   const { logout, user } = useAuth();
@@ -364,6 +366,7 @@ const AdminPortal = () => {
 
   const navItems = [
     { id: "overview", label: "Dashboard", icon: LayoutDashboard },
+    { id: "requests", label: "Lodging Requests", icon: Mail }, // ✅ NEW: Added to Sidebar
     { id: "users", label: "Users", icon: Users },
     { id: "properties", label: "Properties", icon: Home },
     { id: "bins", label: "Bin Management", icon: Trash },
@@ -541,13 +544,10 @@ const AdminPortal = () => {
               </Card>
             )}
 
-            {/* Users Section */}
+            {/* Application Sections */}
+            {currentTab === "requests" && <LodgingRequests />} {/* ✅ NEW: Render Lodging Requests Component */}
             {currentTab === "users" && <UserManagement />}
-
-            {/* Properties Section */}
             {currentTab === "properties" && <PropertyManagement />}
-
-            {/* New Module Sections */}
             {currentTab === "bins" && <BinManagement />}
             {currentTab === "inspections" && <InspectionManagement />}
             {currentTab === "charges" && <ExtraCharges />}

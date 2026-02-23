@@ -10,9 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabaseClient";
+import { toast } from "sonner"; // ✅ Added toast for the popup
 
 interface RoomDetail {
   id: string;
+  property_id: string; // ✅ Added to link the request
   room_number: string;
   room_name?: string;
   room_type: string;
@@ -39,6 +41,10 @@ const PropertyDetail = () => {
   const [room, setRoom] = useState<RoomDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [galleryImages, setGalleryImages] = useState<string[]>([]);
+
+  // ✅ Form State
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', moveDate: '', message: '' });
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -87,6 +93,39 @@ const PropertyDetail = () => {
 
     fetchRoomDetails();
   }, [id]);
+
+  // ✅ Submit Handler
+  const handleRequestSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name || !formData.email) {
+        return toast.error("Name and Email are required.");
+    }
+
+    setSubmitting(true);
+    try {
+        const { error } = await supabase.from('lodging_requests').insert({
+            room_id: room?.id,
+            property_id: room?.property_id,
+            full_name: formData.name,
+            email: formData.email,
+            phone: formData.phone || null,
+            move_in_date: formData.moveDate || null,
+            message: formData.message || null
+        });
+
+        if (error) throw error;
+
+        // ✅ Specific requested message
+        toast.success("Your request has been submitted to the admin, please check your mail for feedback", { duration: 6000 });
+        
+        // Clear form
+        setFormData({ name: '', email: '', phone: '', moveDate: '', message: '' });
+    } catch (err: any) {
+        toast.error("Failed to submit request: " + err.message);
+    } finally {
+        setSubmitting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -231,10 +270,10 @@ const PropertyDetail = () => {
                     <h3 className="font-serif text-xl font-bold text-foreground mb-4">
                       Request to Lodge
                     </h3>
-                    <form className="space-y-4">
+                    <form className="space-y-4" onSubmit={handleRequestSubmit}>
                       <div className="space-y-2">
                         <Label htmlFor="name">Full Name</Label>
-                        <Input id="name" placeholder="John Doe" />
+                        <Input id="name" required placeholder="John Doe" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                       </div>
 
                       <div className="space-y-2">
@@ -242,7 +281,9 @@ const PropertyDetail = () => {
                         <Input
                           id="email"
                           type="email"
+                          required
                           placeholder="john@example.com"
+                          value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})}
                         />
                       </div>
 
@@ -252,12 +293,13 @@ const PropertyDetail = () => {
                           id="phone"
                           type="tel"
                           placeholder="+44 7000 000000"
+                          value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})}
                         />
                       </div>
 
                       <div className="space-y-2">
                         <Label htmlFor="moveDate">Preferred Move-in Date</Label>
-                        <Input id="moveDate" type="date" />
+                        <Input id="moveDate" type="date" value={formData.moveDate} onChange={e => setFormData({...formData, moveDate: e.target.value})} />
                       </div>
 
                       <div className="space-y-2">
@@ -266,11 +308,13 @@ const PropertyDetail = () => {
                           id="message"
                           placeholder="I am interested in this room..."
                           rows={4}
+                          value={formData.message} onChange={e => setFormData({...formData, message: e.target.value})}
                         />
                       </div>
 
-                      <Button className="w-full bg-gradient-gold text-primary font-semibold shadow-gold hover:shadow-lifted">
-                        Submit Request
+                      <Button type="submit" disabled={submitting} className="w-full bg-gradient-gold text-primary font-semibold shadow-gold hover:shadow-lifted">
+                        {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        {submitting ? 'Submitting...' : 'Submit Request'}
                       </Button>
                     </form>
 
